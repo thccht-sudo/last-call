@@ -25,7 +25,7 @@ function say(text: string, frames = 0) {
   banner.style.opacity = text ? '1' : '0';
   bannerUntil = frames ? world.frame + frames : Infinity;
 }
-say('LAST CALL<small>press Start / Enter</small>');
+say('LAST CALL<small>click the game, then press Start / Enter</small>');
 
 function tick() {
   const input = controls.sample();

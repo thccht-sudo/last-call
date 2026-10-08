@@ -14,3 +14,4 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b20; col
   font-size: 64px; font-weight: 900; letter-spacing: 6px; text-shadow: 0 4px 24px #000; transition: opacity 200ms; }
 #banner small { display: block; font-size: 16px; font-weight: 500; letter-spacing: 2px; margin-top: 8px; opacity: 0.8; }
 #hint { position: fixed; bottom: 14px; width: 100%; text-align: center; font-size: 14px; opacity: 0.6; }
+@media (max-width: 600px) { #banner { font-size: 36px; } #hp { width: 160px; } }
