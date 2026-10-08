@@ -4,6 +4,7 @@ import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
 import { sfx, unlockAudio } from './audio';
+import { playMusic, toggleMute } from './music';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
 const overlay = document.querySelector<HTMLElement>('#overlay')!;
@@ -17,8 +18,11 @@ let world: World = createWorld(Date.now());
 let started = false;
 let bannerUntil = 0;
 
-addEventListener('pointerdown', unlockAudio);
-addEventListener('keydown', unlockAudio);
+addEventListener('pointerdown', () => { unlockAudio(); playMusic(started ? 'fight' : 'title'); });
+addEventListener('keydown', e => {
+  unlockAudio();
+  if (e.code === 'KeyM') say(toggleMute() ? 'MUSIC OFF' : 'MUSIC ON', 45);
+});
 
 hud.innerHTML = CAST.map((c, i) => `
   <div class="pbar p${i + 1}" style="--c:${c.css}">
@@ -31,13 +35,13 @@ function say(text: string, frames = 0) {
   banner.style.opacity = text ? '1' : '0';
   bannerUntil = frames ? world.frame + frames : Infinity;
 }
-say('LAST CALL<small>click the game, then press Start / Enter</small>');
+say('LAST CALL<small>click the game, then press Start / Enter · M mutes music</small>');
 
 function tick() {
   const samples = controls.poll();
   if (!started) {
     const dev = controls.joiner(samples);
-    if (dev) { controls.slots = [dev]; started = true; unlockAudio(); say(''); }
+    if (dev) { controls.slots = [dev]; started = true; unlockAudio(); say(''); playMusic('fight'); }
     return;
   }
   // A second device pressing anything joins as player 2.
@@ -48,6 +52,7 @@ function tick() {
   if (world.result !== 'playing' && controls.startPressed(samples)) {
     world = createWorld(Date.now(), controls.slots.length);
     renderer.clear();
+    playMusic('fight');
     say('');
     return;
   }
@@ -63,8 +68,13 @@ function tick() {
     if (ev.type === 'whiff') sfx.whiff();
     if (ev.type === 'dodge') sfx.dodge();
     if (ev.type === 'shatter') sfx.shatter();
-    if (ev.type === 'wave') say(ev.n === T.waves.length - 1 ? 'FINAL ROUND' : `ROUND ${ev.n + 1}`, 90);
+    if (ev.type === 'wave') {
+      const last = ev.n === T.waves.length - 1;
+      say(last ? 'FINAL ROUND' : `ROUND ${ev.n + 1}`, 90);
+      playMusic(last ? 'boss' : 'fight');
+    }
   }
+  if (world.result !== 'playing') playMusic('title');
   if (world.result === 'win') say("LAST CALL<small>Kilroy's is yours · Start / Enter to go again</small>");
   if (world.result === 'lose') say('KNOCKED OUT<small>Start / Enter to try again</small>');
   if (world.frame >= bannerUntil) say('');

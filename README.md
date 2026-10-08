@@ -20,6 +20,12 @@ hit is a TAG TEAM hit for 1.5x damage, and you can counter a swing aimed at your
 | Grab / throw bottle | B | E | Numpad 3 or ' |
 | Start / restart | Start | Enter | Numpad Enter |
 
+The opposition wears IU fraternity shirts (FIJI, ATO, Beta, Sigma Chi, Phi Delt, Kappa Sig);
+the big ones are always FIJI.
+
+Music: three tracks (title, fight, final round) generated with Google Lyria 3 through
+OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
+
 `npm install && npm run dev` to run locally. `npm test` runs the fight simulation headless,
 including a bot that has to clear the bar. All feel numbers live in `src/sim/tuning.ts`; the
 level layout (patio, fence, tables, lamppost, spawns) in `src/sim/level.ts`, and its look in

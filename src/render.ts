@@ -10,6 +10,7 @@ const COLORS = { thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
 interface Look {
   shirt: number; pants: number; skin: number; scale: number;
   jacket?: number; hair?: number; messy?: boolean; beard?: number; glasses?: boolean; collar?: number;
+  print?: { letters: string; ink: string }; // Greek letters across the chest and back
 }
 
 // From their photos. Player 1 is Conrad (6'5"): black collared work shirt, tousled brown hair,
@@ -23,7 +24,40 @@ export const CAST: { name: string; css: string; look: Look }[] = [
   },
 ];
 
-const thugLook = (kind: 'thug' | 'heavy'): Look => ({ shirt: COLORS[kind], pants: 0x2a2a30, skin: COLORS.skin, scale: kind === 'heavy' ? 1.18 : 1 });
+// The opposition: IU fraternity shirts. Heavies are always FIJI.
+const FRATS = [
+  { letters: 'ΦΓΔ', shirt: 0x5b2a86, ink: '#f4f1ea' }, // FIJI
+  { letters: 'ΑΤΩ', shirt: 0x2f6db5, ink: '#f2c443' }, // ATO
+  { letters: 'ΒΘΠ', shirt: 0xe58fb0, ink: '#23408f' }, // Beta
+  { letters: 'ΣΧ', shirt: 0x1f3f8f, ink: '#f2c443' }, // Sigma Chi
+  { letters: 'ΦΔΘ', shirt: 0xe4e4e4, ink: '#1f4fa6' }, // Phi Delt
+  { letters: 'ΚΣ', shirt: 0xb32030, ink: '#f4f1ea' }, // Kappa Sig
+];
+const PANTS = [0x2b3448, 0x6b5a45, 0x3a3f46, 0x2a2a30];
+const SKINS = [0xe0b48a, 0xc89470, 0xf0c8a4, 0x8d5f43, 0xd9a882];
+const thugLook = (kind: 'thug' | 'heavy', id: number): Look => {
+  const f = kind === 'heavy' ? FRATS[0] : FRATS[(id * 7) % FRATS.length];
+  return {
+    shirt: f.shirt, pants: PANTS[id % PANTS.length], skin: SKINS[(id * 3) % SKINS.length],
+    hair: [0x2a1d16, 0x6b4a2a, 0xb08a50, 0x1a1a1a][(id * 5) % 4],
+    print: { letters: f.letters, ink: f.ink }, scale: kind === 'heavy' ? 1.18 : 1,
+  };
+};
+
+const printTex = new Map<string, THREE.CanvasTexture>();
+function letterTexture(letters: string, ink: string) {
+  const key = letters + ink;
+  if (!printTex.has(key)) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 160;
+    const g = c.getContext('2d')!;
+    g.fillStyle = ink; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `900 ${letters.length > 2 ? 104 : 124}px Georgia, "Times New Roman", serif`;
+    g.fillText(letters, 128, 84);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    printTex.set(key, t);
+  }
+  return printTex.get(key)!;
+}
 
 class Figure {
   root = new THREE.Group();
@@ -46,6 +80,15 @@ class Figure {
       // Open collar: a wedge of shirt down the front of the jacket.
       const shirt = mesh(new THREE.BoxGeometry(0.16, 0.42, 0.05), new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.6 }), 1.32, this.body);
       shirt.position.z = 0.25; shirt.rotation.x = -0.12;
+    }
+    if (look.print) {
+      const mat = new THREE.MeshStandardMaterial({ map: letterTexture(look.print.letters, look.print.ink), transparent: true, roughness: 0.8 });
+      for (const side of [1, -1]) {
+        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.29), mat);
+        decal.position.set(0, 1.27, side * 0.265);
+        if (side < 0) decal.rotation.y = Math.PI;
+        this.body.add(decal);
+      }
     }
     if (look.collar !== undefined) {
       // Shirt collar points either side of the neck.
@@ -334,7 +377,7 @@ export class Renderer {
       seen.add(e.id);
       let v = this.enemies.get(e.id);
       if (!v) {
-        const fig = new Figure(thugLook(e.kind));
+        const fig = new Figure(thugLook(e.kind, e.id));
         this.scene.add(fig.root);
         const prompt = document.createElement('div'); prompt.className = 'prompt';
         const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
