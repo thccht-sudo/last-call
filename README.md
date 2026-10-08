@@ -26,7 +26,8 @@ the big ones are always FIJI.
 Music: three tracks (title, fight, final round) generated with Google Lyria 3 through
 OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
 
-`npm install && npm run dev` to run locally. `npm test` runs the fight simulation headless,
+`npm install && npm run dev` to run locally. After each deploy CI plays the live site with
+`tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,
 including a bot that has to clear the bar. All feel numbers live in `src/sim/tuning.ts`; the
 level layout (patio, fence, tables, lamppost, spawns) in `src/sim/level.ts`, and its look in
 `src/scene/kilroys.ts`.

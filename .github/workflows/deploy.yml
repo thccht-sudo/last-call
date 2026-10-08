@@ -22,3 +22,14 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
+      # Play the live build once GitHub Pages is serving it.
+      - if: github.ref == 'refs/heads/main'
+        run: npx playwright install --with-deps chromium
+      - if: github.ref == 'refs/heads/main'
+        run: node tools/smoke.mjs https://thccht-sudo.github.io/last-call/ "$(grep -o 'assets/index-[^"]*\.js' dist/index.html)" smoke.png
+      - if: always() && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot
+          path: smoke.png
+          if-no-files-found: ignore
