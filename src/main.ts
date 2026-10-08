@@ -62,6 +62,12 @@ function tick() {
     if (ev.type === 'hit') { sfx.hit(ev.heavy); if (ev.by >= 0) controls.rumble(ev.by, ev.heavy ? 0.7 : 0.3, 0.5, ev.heavy ? 120 : 60); }
     if (ev.type === 'counter') { sfx.counter(); controls.rumble(ev.by, 1, 0.6, 140); }
     if (ev.type === 'tag') sfx.counter();
+    if (ev.type === 'slam') { sfx.hit(true); controls.rumble(0, 0.8, 0.8, 150); controls.rumble(1, 0.8, 0.8, 150); }
+    if (ev.type === 'deflect') { sfx.counter(); controls.rumble(ev.by, 0.6, 0.6, 100); }
+    if (ev.type === 'throw') sfx.whiff();
+    if (ev.type === 'grabbed') { sfx.hurt(); controls.rumble(ev.player, 0.5, 1, 300); }
+    if (ev.type === 'enrage') say('HE CALLED FOR BACKUP', 90);
+    if (ev.type === 'ko' && ev.boss) say('THE PRESIDENT IS DOWN', 90);
     if (ev.type === 'playerHit') { sfx.hurt(); controls.rumble(ev.player, 1, 1, 200); }
     if (ev.type === 'playerDown' && world.players.length > 1 && world.result === 'playing') say(`${CAST[ev.player].name} IS DOWN<small>stand next to them to help them up</small>`, 120);
     if (ev.type === 'revived') say(`${CAST[ev.player].name} IS BACK UP`, 60);

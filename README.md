@@ -21,10 +21,16 @@ hit is a TAG TEAM hit for 1.5x damage, and you can counter a swing aimed at your
 | Start / restart | Start | Enter | Numpad Enter |
 
 The opposition wears IU fraternity shirts (FIJI, ATO, Beta, Sigma Chi, Phi Delt, Kappa Sig);
-the big ones are always FIJI.
+the big ones are always FIJI. Three rounds:
 
-Music: three tracks (title, fight, final round) generated with Google Lyria 3 through
-OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
+1. Three brawlers. Learn to counter (yellow prompt) and chain the three-hit string.
+2. Brawlers plus a cup thrower (counter a flying red cup to send it back) and a grappler (red
+   prompt: dodge; if he catches you, mash any button, or have your partner hit him).
+3. The FIJI President: two counterable swings then an unblockable haymaker, super armour, and
+   backup at half health. Knock anyone into a table, the fence or a wall for a SLAM.
+
+Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
+through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
 
 `npm install && npm run dev` to run locally. After each deploy CI plays the live site with
 `tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,

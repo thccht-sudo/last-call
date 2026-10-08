@@ -1,11 +1,10 @@
 // Draws a World. Reads sim state only; never changes it.
 import * as THREE from 'three';
-import { TUNING as T } from './sim/tuning';
-import { World, Enemy, Player, GameEvent, Vec, counterable, framesToStrike } from './sim/world';
+import { TUNING as T, EnemyKind } from './sim/tuning';
+import { World, Enemy, Player, GameEvent, Vec, counterable, deflectable, framesToStrike } from './sim/world';
 import { buildKilroys } from './scene/kilroys';
 import { LEVEL } from './sim/level';
 
-const COLORS = { thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
 
 interface Look {
   shirt: number; pants: number; skin: number; scale: number;
@@ -35,12 +34,13 @@ const FRATS = [
 ];
 const PANTS = [0x2b3448, 0x6b5a45, 0x3a3f46, 0x2a2a30];
 const SKINS = [0xe0b48a, 0xc89470, 0xf0c8a4, 0x8d5f43, 0xd9a882];
-const thugLook = (kind: 'thug' | 'heavy', id: number): Look => {
-  const f = kind === 'heavy' ? FRATS[0] : FRATS[(id * 7) % FRATS.length];
+const SCALE: Record<EnemyKind, number> = { thug: 1, heavy: 1.18, thrower: 0.95, grappler: 1.12, boss: 1.35 };
+const thugLook = (kind: EnemyKind, id: number): Look => {
+  const f = kind === 'heavy' || kind === 'boss' ? FRATS[0] : FRATS[(id * 7) % FRATS.length];
   return {
     shirt: f.shirt, pants: PANTS[id % PANTS.length], skin: SKINS[(id * 3) % SKINS.length],
     hair: [0x2a1d16, 0x6b4a2a, 0xb08a50, 0x1a1a1a][(id * 5) % 4],
-    print: { letters: f.letters, ink: f.ink }, scale: kind === 'heavy' ? 1.18 : 1,
+    print: { letters: f.letters, ink: f.ink }, scale: SCALE[kind],
   };
 };
 
@@ -181,6 +181,8 @@ export class Renderer {
   private players: { fig: Figure; tag: HTMLDivElement }[] = [];
   private enemies = new Map<number, { fig: Figure; prompt: HTMLDivElement; bar: HTMLDivElement }>();
   private bottles = new Map<number, THREE.Mesh>();
+  private cups = new Map<number, { mesh: THREE.Group; prompt: HTMLDivElement }>();
+  private bossBar: HTMLDivElement | null = null;
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
   private walkPhase = new Map<object, number>();
@@ -260,6 +262,13 @@ export class Renderer {
       case 'down':
         f.lieDown(1);
         break;
+      case 'grabbed': {
+        const flail = Math.sin(w.frame * 0.6) * 0.5;
+        f.armL.rotation.set(-2.4 + flail, 0, -0.4); f.armR.rotation.set(-2.4 - flail, 0, 0.4);
+        f.legL.rotation.x = flail; f.legR.rotation.x = -flail;
+        f.body.position.y = 0.15; f.body.rotation.x = 0.15;
+        break;
+      }
     }
     if (p.holding !== null && p.state !== 'attack') f.armR.rotation.set(-0.5, 0, 0.1);
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
@@ -269,7 +278,7 @@ export class Renderer {
     f.reset();
     f.place(e.pos, e.facing);
     const moved = this.stride(e, e.pos);
-    const heavy = e.kind === 'heavy';
+    const big = e.unblockable;
     switch (e.state) {
       case 'spawn': case 'circle': case 'approach': case 'recover':
         f.walk(this.walkPhase.get(e)!, Math.min(1, moved * 12));
@@ -277,13 +286,19 @@ export class Renderer {
         break;
       case 'windup': {
         const k = e.t / e.dur;
-        if (heavy) { f.armL.rotation.set(-1.1 - 1.9 * k, 0, -0.2); f.armR.rotation.set(-1.1 - 1.9 * k, 0, 0.2); f.body.rotation.x = 0.25 * k; }
+        if (e.kind === 'grappler') { f.armL.rotation.set(-1.4, 0, -1.2 * k); f.armR.rotation.set(-1.4, 0, 1.2 * k); f.body.rotation.x = -0.2 * k; }
+        else if (e.kind === 'thrower') { f.armR.rotation.set(-1.1 - 2.0 * k, 0, 0.3); f.body.rotation.y = -0.5 * k; }
+        else if (big) { f.armL.rotation.set(-1.1 - 1.9 * k, 0, -0.2); f.armR.rotation.set(-1.1 - 1.9 * k, 0, 0.2); f.body.rotation.x = 0.25 * k; }
         else { f.armR.rotation.set(-1.1 + 1.6 * k, 0, 0.5 * k); f.body.rotation.y = -0.7 * k; }
         break;
       }
       case 'active':
-        if (heavy) { f.armL.rotation.set(-1.3, 0, 0); f.armR.rotation.set(-1.3, 0, 0); f.body.rotation.x = -0.4; }
+        if (e.kind === 'thrower') { f.armR.rotation.set(-1.2, 0, 0); f.body.rotation.y = 0.4; }
+        else if (big) { f.armL.rotation.set(-1.3, 0, 0); f.armR.rotation.set(-1.3, 0, 0); f.body.rotation.x = -0.4; }
         else { f.armR.rotation.set(-1.65, 0, 0); f.body.rotation.y = 0.4; f.body.rotation.x = -0.15; }
+        break;
+      case 'holding':
+        f.armL.rotation.set(-1.5, 0, 0.35); f.armR.rotation.set(-1.5, 0, -0.35); f.body.rotation.x = 0.1;
         break;
       case 'stun':
         f.body.rotation.x = 0.4; f.armL.rotation.x = -0.2; f.armR.rotation.x = -0.2;
@@ -300,7 +315,7 @@ export class Renderer {
     }
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
-    if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = heavy ? 0xff2020 : 0xffd23f; }
+    if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = big ? 0xff2020 : 0xffd23f; }
     if (e.state === 'stun' && e.t < 4) { glow = 0.8; color = 0xffffff; }
     f.glow(color, glow);
   }
@@ -325,6 +340,9 @@ export class Renderer {
   clear() {
     for (const v of this.enemies.values()) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); }
     this.enemies.clear();
+    for (const v of this.cups.values()) { this.scene.remove(v.mesh); v.prompt.remove(); }
+    this.cups.clear();
+    this.bossBar?.remove(); this.bossBar = null;
   }
 
   private screen(x: number, y: number, z: number) {
@@ -348,6 +366,8 @@ export class Renderer {
       if (ev.type === 'playerHit') this.burst(ev.pos, 0xff4040, 0.3, 9);
       if (ev.type === 'shatter') this.shards(ev.pos);
       if (ev.type === 'tag') this.popup(ev.pos, 'TAG TEAM!');
+      if (ev.type === 'slam') { this.burst(ev.pos, 0xffffff, 0.5, 12); this.popup(ev.pos, 'SLAM!'); }
+      if (ev.type === 'deflect') { this.burst(ev.pos, 0xffd23f, 0.3, 8); this.popup(ev.pos, 'RETURN TO SENDER'); }
     }
   }
 
@@ -366,8 +386,8 @@ export class Renderer {
       const { sx, sy } = this.screen(p.pos.x, p.state === 'down' ? 0.9 : 2.25 * CAST[i].look.scale, p.pos.y);
       v.tag.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -100%)`;
       const reviving = p.state === 'down' && p.revive > 0;
-      v.tag.textContent = p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
-      v.tag.classList.toggle('down', p.state === 'down');
+      v.tag.textContent = p.state === 'grabbed' ? `${CAST[i].name} · MASH!` : p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
+      v.tag.classList.toggle('down', p.state === 'down' || p.state === 'grabbed');
     });
     for (let i = w.players.length; i < this.players.length; i++) { this.scene.remove(this.players[i].fig.root); this.players[i].tag.remove(); }
     this.players.length = Math.min(this.players.length, w.players.length);
@@ -387,11 +407,11 @@ export class Renderer {
       }
       if (w.hitstop === 0 || e.state === 'dead') this.poseEnemy(e, v.fig, w);
 
-      const head = new THREE.Vector3(e.pos.x, e.kind === 'heavy' ? 2.6 : 2.25, e.pos.y).project(this.camera);
+      const head = new THREE.Vector3(e.pos.x, 2.2 * SCALE[e.kind] + 0.1, e.pos.y).project(this.camera);
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
       const strike = framesToStrike(e);
       const canCounter = w.players.some(p => counterable(p, e));
-      const mustDodge = e.kind === 'heavy' && strike !== null && strike <= T.counter.window;
+      const mustDodge = e.unblockable && strike !== null && strike <= T.counter.window;
       v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
       v.prompt.textContent = canCounter ? 'Y' : mustDodge ? 'A' : '';
       v.prompt.className = 'prompt' + (canCounter ? ' counter' : mustDodge ? ' dodge' : '');
@@ -401,6 +421,47 @@ export class Renderer {
     }
     for (const [id, v] of this.enemies) {
       if (!seen.has(id)) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); this.enemies.delete(id); }
+    }
+
+    // Red cups in flight, with a counter prompt when someone can knock one back.
+    const liveCups = new Set<number>();
+    for (const c of w.cups) {
+      liveCups.add(c.id);
+      let v = this.cups.get(c.id);
+      if (!v) {
+        const mesh = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.07, 0.22, 12), new THREE.MeshStandardMaterial({ color: 0xc8191e, roughness: 0.5 }));
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.012, 6, 16), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+        rim.rotation.x = Math.PI / 2; rim.position.y = 0.11;
+        mesh.add(body, rim); this.scene.add(mesh);
+        const prompt = document.createElement('div'); prompt.className = 'prompt';
+        this.overlay.append(prompt);
+        v = { mesh, prompt };
+        this.cups.set(c.id, v);
+      }
+      v.mesh.position.set(c.pos.x, 1.3, c.pos.y);
+      v.mesh.rotation.x += 0.35; v.mesh.rotation.z += 0.2;
+      const can = w.players.some(p => deflectable(p, c));
+      const { sx, sy } = this.screen(c.pos.x, 1.9, c.pos.y);
+      v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
+      v.prompt.textContent = can ? 'Y' : '';
+      v.prompt.className = 'prompt' + (can ? ' counter' : '');
+    }
+    for (const [id, v] of this.cups) if (!liveCups.has(id)) { this.scene.remove(v.mesh); v.prompt.remove(); this.cups.delete(id); }
+
+    // The boss gets a health bar across the bottom of the screen.
+    const boss = w.enemies.find(e => e.kind === 'boss' && e.state !== 'dead');
+    if (boss && !this.bossBar) {
+      this.bossBar = document.createElement('div'); this.bossBar.className = 'bossbar';
+      this.bossBar.innerHTML = '<b>THE FIJI PRESIDENT</b><div><i></i></div>';
+      this.overlay.append(this.bossBar);
+    }
+    if (this.bossBar) {
+      if (!boss) { this.bossBar.remove(); this.bossBar = null; }
+      else {
+        (this.bossBar.querySelector('i') as HTMLElement).style.width = `${(boss.hp / boss.maxHp) * 100}%`;
+        this.bossBar.classList.toggle('enraged', boss.enraged);
+      }
     }
 
     for (const b of w.bottles) {

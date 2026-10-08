@@ -4,22 +4,27 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
+// Straight synthwave / darksynth, in the spirit of Midnight Fight Express. No funk, no guitar.
+const STYLE = 'Pure retro synthwave and darksynth instrumental for a neon night-time brawler video game. ' +
+  'Pulsing sequenced 16th-note analog synth bass, punchy 1980s drum machine with big gated-reverb snare, ' +
+  'shimmering arpeggiators, wide detuned saw leads, cinematic analog pads. Purely electronic: no funk, ' +
+  'no slap bass, no guitar, no saxophone, no vocals.';
+
 const TRACKS = {
   title: {
     model: 'google/lyria-3-clip-preview',
-    prompt: 'Title screen loop for a late-night bar brawler video game. Moody 1980s synthwave, slow 90 BPM, ' +
-      'warm analog pads, gated reverb snare, a lonely saxophone-like lead, neon city at 1am, cool and confident. Instrumental, no vocals.',
+    prompt: `${STYLE} Title screen loop: brooding and cool, 95 BPM, slow-building arpeggio over a low pulsing bass, ` +
+      'a lone wistful lead melody, like driving through an empty neon city at 2am.',
   },
   fight: {
     model: 'google/lyria-3-pro-preview',
-    prompt: 'Driving combat music for a co-op beat-em-up video game set outside a college bar at night. ' +
-      'Aggressive retro synthwave mixed with funk: punchy 128 BPM drum machine, slap bass riff, distorted analog synth stabs, ' +
-      'tension builds and drops, loopable, energetic like an 80s action movie street fight. Instrumental, no vocals.',
+    prompt: `${STYLE} Combat track: relentless and driving at 120 BPM, four-on-the-floor kick, rolling octave bass, ` +
+      'urgent stabbing synth chords and a heroic soaring lead, keeps momentum the whole way, seamless for looping.',
   },
   boss: {
     model: 'google/lyria-3-pro-preview',
-    prompt: 'Final round boss fight music for a retro brawler video game. Heavy, menacing darkwave at 140 BPM, ' +
-      'pounding kick, growling detuned bass synth, urgent arpeggios, big gated drums, rising stakes, loopable. Instrumental, no vocals.',
+    prompt: `${STYLE} Final boss track: darker and heavier darksynth at 130 BPM, distorted growling bass, ` +
+      'ominous minor-key arpeggios, pounding drums, tension rising to a huge climactic lead, seamless for looping.',
   },
 };
 

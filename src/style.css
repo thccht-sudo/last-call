@@ -27,3 +27,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b20; col
 #banner small { display: block; font-size: 16px; font-weight: 500; letter-spacing: 2px; margin-top: 8px; opacity: 0.8; }
 #hint { position: fixed; bottom: 14px; left: 16px; right: 16px; text-align: center; font-size: 13px; opacity: 0.6; }
 @media (max-width: 600px) { #banner { font-size: 36px; } }
+.bossbar { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); width: min(560px, 80vw); display: grid; gap: 4px; text-align: center; }
+.bossbar b { font-size: 13px; letter-spacing: 4px; color: #e9dcff; text-shadow: 0 1px 4px #000; }
+.bossbar div { height: 12px; background: #000a; border: 2px solid #8a5bd6; }
+.bossbar i { display: block; height: 100%; background: #8a5bd6; transition: width 150ms; }
+.bossbar.enraged div { border-color: #e23b3b; }
+.bossbar.enraged i { background: #e23b3b; }

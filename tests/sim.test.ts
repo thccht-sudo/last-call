@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike } from '../src/sim/world';
+import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
 import { insideObstacle } from '../src/sim/level';
+import type { EnemyKind } from '../src/sim/tuning';
 
 const press = (k: Partial<Input>): Input => ({ ...NO_INPUT, ...k });
 const run = (w: World, n: number, input: Input = NO_INPUT) => { for (let i = 0; i < n; i++) step(w, input); };
 
 // A world with the wave system parked and one enemy placed by hand.
-function duel(kind: 'thug' | 'heavy' = 'thug', at = { x: 0, y: 0.8 }) {
+function duel(kind: EnemyKind = 'thug', at = { x: 0, y: 0.8 }) {
   const w = createWorld(7);
   w.wave = 0; w.waveTimer = 1e9;
   const e = spawnEnemy(w, kind, at, 'circle');
@@ -141,16 +142,18 @@ describe('crowd', () => {
   });
 });
 
-// Counters yellow prompts, dodges red ones, otherwise attacks the nearest enemy.
+// Reads prompts like a decent player: counters yellow, knocks cups back, dodges red, mashes out
+// of grabs, helps a downed partner, otherwise attacks the nearest enemy.
 function botFor(w: World, i: number): Input {
   const p = w.players[i];
+  if (p.state === 'grabbed') return press({ attack: w.frame % 2 === 0 });
+  if (w.cups.some(c => deflectable(p, c) && Math.hypot(c.pos.x - p.pos.x, c.pos.y - p.pos.y) < 1.4)) return press({ counter: true });
   for (const e of w.enemies) {
     const f = framesToStrike(e);
+    if (f === null || f > 12) continue;
+    if (counterable(p, e)) return press({ counter: true });
     const d = Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
-    if (f !== null && f <= 12 && d < T.counter.range) {
-      if (T[e.kind].armored) return press({ dodge: true, mx: p.pos.x - e.pos.x, my: p.pos.y - e.pos.y });
-      return press({ counter: true });
-    }
+    if (e.unblockable && d < 2.6 && e.focus === i) return press({ dodge: true, mx: p.pos.x - e.pos.x, my: p.pos.y - e.pos.y });
   }
   const down = w.players.find(o => o.state === 'down');
   if (down && down !== p) return press({ mx: down.pos.x - p.pos.x, my: down.pos.y - p.pos.y });
@@ -257,5 +260,76 @@ describe('co-op', () => {
       for (let i = 0; i < 60 * 300 && w.result === 'playing'; i++) step(w, w.players.map(p => botFor(w, p.index)));
       expect(w.result, `seed ${seed}`).toBe('win');
     }
+  });
+});
+
+describe('new enemies', () => {
+  it('a thrower\'s cup can be knocked back to drop him', () => {
+    const { w, e } = duel('thrower', { x: 0, y: -1.6 });
+    w.players[0].pos = { x: 0, y: 3 };
+    untilStrikeIn(w, e, 0);
+    for (let i = 0; i < 120 && !w.cups.some(c => deflectable(w.players[0], c)); i++) step(w, NO_INPUT);
+    step(w, press({ counter: true }));
+    expect(w.cups[0]?.owner).toBe(0);
+    run(w, 60);
+    expect(e.hp).toBeLessThanOrEqual(T.thrower.hp - T.cup.deflectDamage);
+    expect(['down', 'dead']).toContain(e.state);
+    expect(w.players[0].hp).toBe(T.player.hp);
+  });
+
+  it('a grab can be mashed out of', () => {
+    const { w, e } = duel('grappler');
+    untilStrikeIn(w, e, 0);
+    run(w, 3);
+    expect(w.players[0].state).toBe('grabbed');
+    for (let i = 0; i < T.grab.escapePresses * 2; i++) step(w, press({ attack: i % 2 === 0 }));
+    expect(w.players[0].state).toBe('free');
+    expect(e.state).toBe('stun');
+  });
+
+  it('a partner hitting the grappler frees you', () => {
+    const w = createWorld(7, 2);
+    w.wave = 0; w.waveTimer = 1e9;
+    w.players[0].pos = { x: 0, y: 2 }; w.players[1].pos = { x: 3, y: 0.8 };
+    const e = spawnEnemy(w, 'grappler', { x: 0, y: 0.8 }, 'circle');
+    untilStrikeIn(w, e, 0);
+    run(w, 3);
+    expect(w.players[0].state).toBe('grabbed');
+    step(w, [NO_INPUT, press({ attack: true, mx: -1 })]);
+    run(w, 14);
+    expect(w.players[0].state).toBe('free');
+  });
+
+  it('the boss swings twice (counterable) then throws an unblockable haymaker', () => {
+    const { w, e } = duel('boss');
+    const kinds: boolean[] = [];
+    for (let i = 0; i < 1500 && kinds.length < 3; i++) {
+      const was = e.state;
+      step(w, NO_INPUT);
+      if (was !== 'windup' && e.state === 'windup') kinds.push(e.unblockable);
+      w.players[0].hp = T.player.hp; // keep the test alive
+    }
+    expect(kinds).toEqual([false, false, true]);
+  });
+
+  it('the boss calls for backup at half health', () => {
+    const { w, e } = duel('boss');
+    const before = w.enemies.length;
+    e.state = 'stun'; e.dur = 999;
+    e.hp = Math.ceil(e.maxHp * T.bossEnrage) + 5;
+    step(w, press({ attack: true, my: -1 }));
+    run(w, 10);
+    expect(e.enraged).toBe(true);
+    expect(w.enemies.length).toBe(before + 2);
+  });
+
+  it('knocking an enemy into a table slams them for extra damage', () => {
+    const { w, e } = duel('grappler', { x: 0.6, y: -2.0 });
+    w.players[0].pos = { x: 0.6, y: -0.9 };
+    e.state = 'stun'; e.dur = 999;
+    for (let i = 0; i < 3; i++) { step(w, press({ attack: true, my: -1 })); run(w, 12); }
+    run(w, 10);
+    const dealt = T.combo.reduce((s, c) => s + c.damage, 0);
+    expect(T.grappler.hp - e.hp).toBe(dealt + T.slam.damage);
   });
 });

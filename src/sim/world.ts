@@ -1,6 +1,6 @@
 // Deterministic fight simulation. No rendering, no clock: step() advances one 60 Hz frame.
 import { TUNING as T, EnemyKind } from './tuning';
-import { LEVEL, steer, collide, insideObstacle } from './level';
+import { LEVEL, steer, collide, insideObstacle, clearLine } from './level';
 
 export interface Vec { x: number; y: number }
 
@@ -12,42 +12,55 @@ export const NO_INPUT: Input = { mx: 0, my: 0, attack: false, counter: false, do
 
 type Action = 'attack' | 'counter' | 'dodge' | 'grab';
 
-export type PlayerState = 'free' | 'attack' | 'counter' | 'whiff' | 'dodge' | 'hitstun' | 'down';
+export type PlayerState = 'free' | 'attack' | 'counter' | 'whiff' | 'dodge' | 'hitstun' | 'grabbed' | 'down';
 export interface Player {
   index: number; revive: number; // frames a partner has spent reviving this player
   pos: Vec; facing: Vec; hp: number;
   state: PlayerState; t: number; dur: number;
   combo: number; target: number | null; hasHit: boolean; chain: boolean;
   dodgeDir: Vec; holding: number | null; smash: boolean;
+  escape: number; // attack presses while grabbed
   buffer: { action: Action; frames: number } | null;
 }
 
-export type EnemyState = 'spawn' | 'circle' | 'approach' | 'windup' | 'active' | 'recover' | 'stun' | 'down' | 'getup' | 'dead';
+export type EnemyState = 'spawn' | 'circle' | 'approach' | 'windup' | 'active' | 'recover' | 'holding' | 'stun' | 'down' | 'getup' | 'dead';
 export interface Enemy {
   id: number; kind: EnemyKind; pos: Vec; facing: Vec; vel: Vec; hp: number; maxHp: number;
   state: EnemyState; t: number; dur: number; cooldown: number; angle: number; orbit: number; entry: Vec;
   focus: number; lastHitBy: number; lastHitFrame: number;
+  unblockable: boolean; // the current swing can't be countered
+  string: number; // boss: position in the swing, swing, haymaker string
+  enraged: boolean; slammed: boolean;
 }
 
 export interface Bottle { id: number; home: Vec; pos: Vec; vel: Vec; state: 'ground' | 'held' | 'flying' | 'broken'; t: number; holder: number }
 
+// A thrown red cup. owner -1 is an enemy throw; a deflected cup belongs to the player who countered it.
+export interface Cup { id: number; pos: Vec; vel: Vec; owner: number; from: number }
+
 export type GameEvent =
   | { type: 'hit'; pos: Vec; heavy: boolean; by: number }
   | { type: 'tag'; pos: Vec }
+  | { type: 'slam'; pos: Vec }
   | { type: 'counter'; pos: Vec; by: number }
+  | { type: 'deflect'; pos: Vec; by: number }
   | { type: 'whiff'; by: number }
   | { type: 'playerHit'; pos: Vec; heavy: boolean; player: number }
+  | { type: 'grabbed'; player: number }
+  | { type: 'escaped'; player: number }
   | { type: 'playerDown'; player: number }
   | { type: 'revived'; player: number }
   | { type: 'joined'; player: number }
+  | { type: 'enrage'; pos: Vec }
+  | { type: 'throw'; pos: Vec }
   | { type: 'shatter'; pos: Vec }
   | { type: 'dodge'; by: number }
   | { type: 'wave'; n: number }
-  | { type: 'ko'; pos: Vec };
+  | { type: 'ko'; pos: Vec; boss: boolean };
 
 export interface World {
   frame: number; hitstop: number; shake: number;
-  players: Player[]; enemies: Enemy[]; bottles: Bottle[];
+  players: Player[]; enemies: Enemy[]; bottles: Bottle[]; cups: Cup[];
   wave: number; waveTimer: number; result: 'playing' | 'win' | 'lose';
   events: GameEvent[]; rng: number; nextId: number;
 }
@@ -67,7 +80,7 @@ function newPlayer(index: number, pos: Vec): Player {
   return {
     index, revive: 0, pos: { ...pos }, facing: { x: 0, y: -1 }, hp: T.player.hp,
     state: 'free', t: 0, dur: 0, combo: 0, target: null, hasHit: false, chain: false,
-    dodgeDir: { x: 0, y: 0 }, holding: null, smash: false, buffer: null,
+    dodgeDir: { x: 0, y: 0 }, holding: null, smash: false, escape: 0, buffer: null,
   };
 }
 
@@ -85,7 +98,7 @@ export function createWorld(seed = 1, playerCount = 1): World {
   const w: World = {
     frame: 0, hitstop: 0, shake: 0,
     players: [newPlayer(0, LEVEL.playerStart)],
-    enemies: [], bottles: [], wave: -1, waveTimer: 30, result: 'playing',
+    enemies: [], bottles: [], cups: [], wave: -1, waveTimer: 30, result: 'playing',
     events: [], rng: seed >>> 0 || 1, nextId: 1,
   };
   for (const home of LEVEL.bottleSpots) {
@@ -102,12 +115,11 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
     id: w.nextId++, kind, pos: { ...pos }, facing: { x: 0, y: 1 }, vel: { x: 0, y: 0 },
     hp: k.hp, maxHp: k.hp, state, t: 0, dur: state === 'spawn' ? 20 : 0,
     cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
-    focus: 0, lastHitBy: -1, lastHitFrame: -999,
+    focus: 0, lastHitBy: -1, lastHitFrame: -999, unblockable: false, string: 0, enraged: false, slammed: false,
   };
   w.enemies.push(e);
   return e;
 }
-
 
 function startWave(w: World, n: number) {
   w.wave = n;
@@ -149,6 +161,8 @@ const playerInvulnerable = (p: Player) =>
   p.state === 'counter' || p.state === 'down' ||
   (p.state === 'dodge' && p.t >= T.dodge.invulnFrom && p.t <= T.dodge.invulnTo);
 
+export const standing = (p: Player) => p.state !== 'down';
+
 // Frames until this enemy's strike lands; null if it isn't winding up.
 export function framesToStrike(e: Enemy): number | null {
   if (e.state === 'windup') return e.dur - e.t;
@@ -156,15 +170,31 @@ export function framesToStrike(e: Enemy): number | null {
   return null;
 }
 
-// Any player in range can counter, including to save a partner.
+// Any player in range can counter, including to save a partner. Throwers are countered by
+// knocking their cup back, not in melee.
 export function counterable(p: Player, e: Enemy): boolean {
   const f = framesToStrike(e);
-  return f !== null && f <= T.counter.window && !T[e.kind].armored && p.state !== 'down' && dist(e.pos, p.pos) <= T.counter.range;
+  return f !== null && f <= T.counter.window && !e.unblockable && e.kind !== 'thrower' &&
+    standing(p) && p.state !== 'grabbed' && dist(e.pos, p.pos) <= T.counter.range;
 }
 
-export const standing = (p: Player) => p.state !== 'down';
+// An incoming enemy cup this player can knock back.
+export function deflectable(p: Player, c: Cup): boolean {
+  if (c.owner !== -1 || !standing(p) || p.state === 'grabbed') return false;
+  const to = sub(p.pos, c.pos);
+  return len(to) <= T.cup.deflectRange && dot(norm(to), norm(c.vel)) > 0.3;
+}
 
-function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, stun: number, knockdown: boolean, by = -1) {
+// The boss shrugs off light hits; heavies and grapplers only while swinging.
+function hasArmour(e: Enemy) {
+  return e.kind === 'boss' || (e.unblockable && (e.state === 'windup' || e.state === 'active'));
+}
+
+function heldBy(w: World, e: Enemy): Player | undefined {
+  return e.state === 'holding' ? w.players.find(p => p.index === e.focus && p.state === 'grabbed') : undefined;
+}
+
+function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, stun: number, knockdown: boolean, by = -1, force = false) {
   // Tag team: hitting an enemy your partner just hit lands harder.
   if (by >= 0 && e.lastHitBy >= 0 && e.lastHitBy !== by && w.frame - e.lastHitFrame <= T.coop.tagWindow) {
     dmg = Math.round(dmg * T.coop.tagMultiplier);
@@ -173,19 +203,36 @@ function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, 
   if (by >= 0) { e.lastHitBy = by; e.lastHitFrame = w.frame; }
   e.hp -= dmg;
   const away = norm(sub(e.pos, from));
-  e.vel = { x: away.x * knock * 0.06, y: away.y * knock * 0.06 };
-  e.facing = { x: -away.x, y: -away.y };
+  const armour = hasArmour(e) && !force;
+  const knockScale = armour ? 0.3 : 1;
+  e.vel = { x: away.x * knock * 0.06 * knockScale, y: away.y * knock * 0.06 * knockScale };
+  if (!armour) e.facing = { x: -away.x, y: -away.y };
+  // Hitting a grappler makes him let go.
+  const held = heldBy(w, e);
+  if (held) { setPlayer(held, 'free', 0); held.escape = 0; w.events.push({ type: 'escaped', player: held.index }); }
   if (e.hp <= 0) {
     e.hp = 0;
     e.vel = { x: away.x * 0.3, y: away.y * 0.3 };
     setEnemy(e, 'dead', 0);
-    w.events.push({ type: 'ko', pos: { ...e.pos } });
+    w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' });
     return;
   }
-  const armoredWindup = T[e.kind].armored && (e.state === 'windup' || e.state === 'active') && !knockdown;
-  if (armoredWindup) return;
-  if (knockdown) setEnemy(e, 'down', T.knockdownFrames);
-  else setEnemy(e, 'stun', stun);
+  if (e.kind === 'boss' && !e.enraged && e.hp <= e.maxHp * T.bossEnrage) enrage(w, e);
+  if (armour && !held) return;
+  e.string = 0;
+  if (knockdown) { e.slammed = false; setEnemy(e, 'down', e.kind === 'boss' ? T.knockdownFrames - 20 : T.knockdownFrames); }
+  else setEnemy(e, 'stun', stun || T[e.kind].stun);
+}
+
+function enrage(w: World, e: Enemy) {
+  e.enraged = true;
+  w.events.push({ type: 'enrage', pos: { ...e.pos } });
+  w.shake = 0.5;
+  for (let i = 0; i < 2; i++) {
+    const s = LEVEL.spawns[1 + i];
+    const add = spawnEnemy(w, 'thug', s.from, 'spawn', s.to);
+    add.dur = 20 + i * 30;
+  }
 }
 
 function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
@@ -197,6 +244,19 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
     return true;
   }
   if (action === 'counter') {
+    // Knock an incoming cup back at whoever threw it.
+    const cup = w.cups.filter(c => deflectable(p, c)).sort((a, b) => dist(a.pos, p.pos) - dist(b.pos, p.pos))[0];
+    if (cup) {
+      const thrower = w.enemies.find(e => e.id === cup.from && targetable(e));
+      const n = thrower ? norm(sub(thrower.pos, cup.pos)) : norm({ x: -cup.vel.x, y: -cup.vel.y });
+      cup.vel = { x: n.x * T.cup.deflectSpeed, y: n.y * T.cup.deflectSpeed };
+      cup.owner = p.index;
+      p.facing = n;
+      setPlayer(p, 'counter', T.counter.frames - 8);
+      w.hitstop = T.hitstop.light; w.shake = 0.15;
+      w.events.push({ type: 'deflect', pos: { ...cup.pos }, by: p.index });
+      return true;
+    }
     let best: Enemy | null = null;
     for (const e of w.enemies) {
       if (counterable(p, e) && (!best || dist(e.pos, p.pos) < dist(best.pos, p.pos))) best = e;
@@ -206,7 +266,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
     p.facing = to;
     p.pos = { x: best.pos.x - to.x * T.strikeDistance, y: best.pos.y - to.y * T.strikeDistance };
     setPlayer(p, 'counter', T.counter.frames);
-    damageEnemy(w, best, T.counter.damage, p.pos, 4, 0, true, p.index);
+    damageEnemy(w, best, T.counter.damage, p.pos, 4, 0, true, p.index, true);
     w.hitstop = T.hitstop.counter; w.shake = 0.35;
     w.events.push({ type: 'counter', pos: { ...best.pos }, by: p.index });
     return true;
@@ -243,18 +303,16 @@ function canAct(p: Player): boolean {
     const s = T.combo[p.combo];
     return p.t >= s.startup + s.active; // cancel recovery into anything
   }
-  if (p.state === 'counter') return p.t >= T.counter.frames - 8;
+  if (p.state === 'counter') return p.t >= p.dur - 8;
   return false;
 }
 
 function stepPlayer(w: World, p: Player, input: Input) {
   p.t++;
   const pressed: Action | null = input.counter ? 'counter' : input.dodge ? 'dodge' : input.attack ? 'attack' : input.grab ? 'grab' : null;
-  if (pressed) p.buffer = { action: pressed, frames: T.inputBuffer };
-  else if (p.buffer && --p.buffer.frames <= 0) p.buffer = null;
 
   if (p.state === 'down') {
-    const helper = w.players.find(o => o !== p && standing(o) && dist(o.pos, p.pos) <= T.coop.reviveRange);
+    const helper = w.players.find(o => o !== p && standing(o) && o.state !== 'grabbed' && dist(o.pos, p.pos) <= T.coop.reviveRange);
     p.revive = helper ? p.revive + 1 : Math.max(0, p.revive - 2);
     if (p.revive >= T.coop.reviveFrames) {
       p.hp = T.coop.reviveHp; p.revive = 0; setPlayer(p, 'free', 0);
@@ -262,6 +320,23 @@ function stepPlayer(w: World, p: Player, input: Input) {
     }
     return;
   }
+
+  if (p.state === 'grabbed') {
+    // Mash anything to break free.
+    p.buffer = null;
+    if (!w.enemies.some(x => x.state === 'holding' && x.focus === p.index)) { setPlayer(p, 'free', 0); p.escape = 0; return; }
+    if (pressed) p.escape++;
+    if (p.escape >= T.grab.escapePresses) {
+      const e = w.enemies.find(x => x.state === 'holding' && x.focus === p.index);
+      if (e) { setEnemy(e, 'stun', 50); const a = norm(sub(e.pos, p.pos)); e.vel = { x: a.x * 0.25, y: a.y * 0.25 }; }
+      setPlayer(p, 'free', 0); p.escape = 0;
+      w.events.push({ type: 'escaped', player: p.index });
+    }
+    return;
+  }
+
+  if (pressed) p.buffer = { action: pressed, frames: T.inputBuffer };
+  else if (p.buffer && --p.buffer.frames <= 0) p.buffer = null;
 
   if (p.buffer && canAct(p)) {
     const prev = p.state, prevCombo = p.combo, prevHit = p.hasHit;
@@ -288,7 +363,7 @@ function stepPlayer(w: World, p: Player, input: Input) {
       const target = w.enemies.find(e => e.id === p.target && targetable(e));
       if (p.t <= s.startup && target) {
         const to = sub(target.pos, p.pos), d = len(to);
-        const want = d - T.strikeDistance;
+        const want = d - T.strikeDistance - (T[target.kind].radius - 0.45);
         if (want > 0) {
           const stepLen = Math.min(want, Math.max(want / Math.max(1, s.startup - p.t + 1), 0), T.maxLungeSpeed);
           const n = norm(to);
@@ -301,12 +376,9 @@ function stepPlayer(w: World, p: Player, input: Input) {
         for (const e of w.enemies) {
           if (!targetable(e)) continue;
           const to = sub(e.pos, p.pos), d = len(to);
-          if (d > T.hitReach || (d > 0.4 && dot(norm(to), p.facing) < 0.3)) continue;
-          if (p.smash) {
-            damageEnemy(w, e, T.bottle.meleeDamage, p.pos, 5, 0, true, p.index);
-          } else {
-            damageEnemy(w, e, s.damage, p.pos, s.knock, s.stun, s.knockdown, p.index);
-          }
+          if (d > T.hitReach + T[e.kind].radius - 0.45 || (d > 0.4 && dot(norm(to), p.facing) < 0.3)) continue;
+          if (p.smash) damageEnemy(w, e, T.bottle.meleeDamage, p.pos, 5, 0, true, p.index, true);
+          else damageEnemy(w, e, s.damage, p.pos, s.knock, s.stun, s.knockdown, p.index);
           landed = true;
         }
         if (landed) {
@@ -342,28 +414,60 @@ function breakHeldBottle(w: World, p: Player) {
   w.events.push({ type: 'shatter', pos: { ...b.pos } });
 }
 
-function hitPlayer(w: World, p: Player, e: Enemy) {
+function dropBottle(w: World, p: Player, away: Vec) {
+  if (p.holding === null) return;
+  const b = w.bottles.find(b => b.id === p.holding)!;
+  b.state = 'ground'; b.pos = { x: p.pos.x - away.x * 0.8, y: p.pos.y - away.y * 0.8 }; p.holding = null;
+}
+
+// Returns true if the hit put the player down.
+function hurtPlayer(w: World, p: Player, dmg: number, from: Vec, heavy: boolean, knock: number): boolean {
+  p.hp -= dmg;
+  const away = norm(sub(p.pos, from));
+  p.pos.x += away.x * knock; p.pos.y += away.y * knock;
+  dropBottle(w, p, away);
+  w.hitstop = heavy ? T.hitstop.heavy : T.hitstop.light;
+  w.shake = heavy ? 0.35 : 0.2;
+  w.events.push({ type: 'playerHit', pos: { ...p.pos }, heavy, player: p.index });
+  if (p.hp > 0) return false;
+  const holder = w.enemies.find(x => x.state === 'holding' && x.focus === p.index);
+  if (holder) setEnemy(holder, 'recover', T[holder.kind].recovery);
+  p.hp = 0; p.revive = 0; p.escape = 0; setPlayer(p, 'down', 0);
+  w.events.push({ type: 'playerDown', player: p.index });
+  if (!w.players.some(standing)) w.result = 'lose';
+  return true;
+}
+
+function strike(w: World, p: Player, e: Enemy) {
+  if (e.kind === 'grappler') {
+    dropBottle(w, p, norm(sub(p.pos, e.pos)));
+    setPlayer(p, 'grabbed', 0); p.escape = 0;
+    setEnemy(e, 'holding', T.grab.holdFrames);
+    p.pos = { x: e.pos.x + e.facing.x * 0.8, y: e.pos.y + e.facing.y * 0.8 };
+    w.shake = 0.2;
+    w.events.push({ type: 'grabbed', player: p.index });
+    return;
+  }
+  const haymaker = e.kind === 'boss' && e.unblockable;
+  const dmg = haymaker ? T.bossHaymaker.damage : T[e.kind].damage;
+  if (!hurtPlayer(w, p, dmg, e.pos, e.unblockable, 0.5)) { setPlayer(p, 'hitstun', 20); p.combo = 0; }
+}
+
+// Choose the next swing, set its wind-up and whether it can be countered.
+function startWindup(e: Enemy) {
   const k = T[e.kind];
-  p.hp -= k.damage;
-  const away = norm(sub(p.pos, e.pos));
-  p.pos.x += away.x * 0.5; p.pos.y += away.y * 0.5;
-  if (p.holding !== null) {
-    const b = w.bottles.find(b => b.id === p.holding)!;
-    b.state = 'ground'; b.pos = { x: p.pos.x - away.x * 0.8, y: p.pos.y - away.y * 0.8 }; p.holding = null;
+  let windup: number = k.windup;
+  e.unblockable = k.unblockable;
+  if (e.kind === 'boss') {
+    e.unblockable = e.string === 2;
+    windup = e.unblockable ? T.bossHaymaker.windup : k.windup;
+    if (e.enraged) windup = Math.round(windup * 0.8);
   }
-  w.hitstop = T[e.kind].armored ? T.hitstop.heavy : T.hitstop.light;
-  w.shake = 0.3;
-  w.events.push({ type: 'playerHit', pos: { ...p.pos }, heavy: k.armored, player: p.index });
-  if (p.hp <= 0) {
-    p.hp = 0; p.revive = 0; setPlayer(p, 'down', 0);
-    w.events.push({ type: 'playerDown', player: p.index });
-    if (!w.players.some(standing)) w.result = 'lose';
-  }
-  else { setPlayer(p, 'hitstun', 20); p.combo = 0; }
+  setEnemy(e, 'windup', windup);
 }
 
 function attackersBusy(w: World) {
-  return w.enemies.filter(e => e.state === 'approach' || e.state === 'windup' || e.state === 'active').length;
+  return w.enemies.filter(e => e.state === 'approach' || e.state === 'windup' || e.state === 'active' || e.state === 'holding').length;
 }
 
 function nearestStanding(w: World, from: Vec): Player | null {
@@ -387,8 +491,8 @@ function stepEnemies(w: World) {
 
   for (const e of w.enemies) {
     const k = T[e.kind];
-    // Pick who to fight; once a swing has started, it stays on that player.
-    if (e.state !== 'windup' && e.state !== 'active') {
+    // Pick who to fight; once a swing or a grab has started, it stays on that player.
+    if (e.state !== 'windup' && e.state !== 'active' && e.state !== 'holding') {
       const near = nearestStanding(w, e.pos);
       if (near) e.focus = near.index;
     }
@@ -408,37 +512,71 @@ function stepEnemies(w: World) {
       const s = Math.min(l, speed / T.fps);
       e.pos.x += v.x / l * s; e.pos.y += v.y / l * s;
     };
+    const speed = k.speed * (e.enraged ? 1.25 : 1);
     switch (e.state) {
       case 'spawn':
-        move(e.entry, k.speed);
+        move(e.entry, speed);
         if (e.t >= e.dur) setEnemy(e, 'circle', 0);
         break;
       case 'circle': {
         e.angle += e.orbit * 0.006;
         const want = { x: p.pos.x + Math.cos(e.angle) * k.circleRadius, y: p.pos.y + Math.sin(e.angle) * k.circleRadius };
-        move(want, k.speed * 0.6);
+        move(want, speed * 0.6);
         e.facing = toN;
         break;
       }
-      case 'approach':
+      case 'approach': {
         e.facing = toN;
-        if (d <= k.attackRange) { setEnemy(e, 'windup', k.windup); break; }
-        move(p.pos, k.speed);
-        if (e.t >= e.dur) { setEnemy(e, 'circle', 0); e.cooldown = k.cooldown; }
+        const inRange = d <= k.attackRange && (e.kind !== 'thrower' || clearLine(e.pos, p.pos, 0.15));
+        if (inRange && standing(p) && p.state !== 'grabbed') { startWindup(e); break; }
+        move(p.pos, speed);
+        if (e.t >= e.dur) { setEnemy(e, 'circle', 0); e.cooldown = k.cooldown; e.string = 0; }
         break;
+      }
       case 'windup':
         if (e.dur - e.t > k.trackUntil) {
           e.facing = toN;
-          if (d > k.attackRange * 0.9) move(p.pos, k.speed * 0.5);
+          if (e.kind !== 'thrower' && d > k.attackRange * 0.9) move(p.pos, speed * 0.5);
         }
         if (e.t >= e.dur) setEnemy(e, 'active', k.active);
         break;
       case 'active':
-        if (e.t === 1 && !playerInvulnerable(p) && d <= k.attackRange + 0.35 && dot(e.facing, toN) > 0.5) hitPlayer(w, p, e);
-        if (e.t >= e.dur) setEnemy(e, 'recover', k.recovery);
+        if (e.t === 1) {
+          if (e.kind === 'thrower') {
+            const start = { x: e.pos.x + e.facing.x * 0.6, y: e.pos.y + e.facing.y * 0.6 };
+            w.cups.push({ id: w.nextId++, pos: start, vel: { x: e.facing.x * T.cup.speed, y: e.facing.y * T.cup.speed }, owner: -1, from: e.id });
+            w.events.push({ type: 'throw', pos: start });
+          } else if (!playerInvulnerable(p) && p.state !== 'grabbed' && d <= k.attackRange + 0.35 && dot(e.facing, toN) > 0.5) {
+            strike(w, p, e);
+          }
+        }
+        if (e.state === 'active' && e.t >= e.dur) {
+          setEnemy(e, 'recover', e.kind === 'boss' && e.unblockable ? T.bossHaymaker.recovery : k.recovery);
+        }
+        break;
+      case 'holding':
+        e.facing = toN;
+        if (p.state !== 'grabbed') { setEnemy(e, 'recover', k.recovery); break; }
+        p.pos = { x: e.pos.x + e.facing.x * 0.8, y: e.pos.y + e.facing.y * 0.8 };
+        if (e.t % T.grab.tick === 0 && hurtPlayer(w, p, k.damage, e.pos, false, 0)) break;
+        if (e.t >= e.dur) {
+          // Throw them.
+          setPlayer(p, 'hitstun', 30);
+          p.pos = { x: e.pos.x + e.facing.x * 2, y: e.pos.y + e.facing.y * 2 };
+          hurtPlayer(w, p, T.grab.throwDamage, e.pos, true, 0);
+          setEnemy(e, 'recover', k.recovery);
+        }
         break;
       case 'recover':
-        if (e.t >= e.dur) { setEnemy(e, 'circle', 0); e.cooldown = k.cooldown + Math.floor(rand(w) * 40); }
+        if (e.t >= e.dur) {
+          if (e.kind === 'boss') {
+            // The string continues: swing, swing, haymaker.
+            e.string = (e.string + 1) % 3;
+            if (e.string !== 0) { setEnemy(e, 'approach', 120); break; }
+          }
+          setEnemy(e, 'circle', 0);
+          e.cooldown = Math.round((k.cooldown + Math.floor(rand(w) * 40)) * (e.enraged ? 0.6 : 1));
+        }
         break;
       case 'stun':
         if (e.t >= e.dur) { setEnemy(e, 'circle', 0); e.cooldown = Math.max(e.cooldown, 20); }
@@ -453,19 +591,46 @@ function stepEnemies(w: World) {
   }
 }
 
+function outOfBounds(p: Vec) {
+  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  return p.x < minX || p.x > maxX || p.y < minY || p.y > maxY || insideObstacle(p, -0.05);
+}
+
+function stepCups(w: World) {
+  w.cups = w.cups.filter(c => {
+    c.pos.x += c.vel.x; c.pos.y += c.vel.y;
+    if (c.owner === -1) {
+      const p = w.players.find(p => !playerInvulnerable(p) && dist(p.pos, c.pos) < T.cup.hitRadius);
+      if (p) {
+        if (!hurtPlayer(w, p, T.thrower.damage, c.pos, false, 0.3) && p.state !== 'grabbed') { setPlayer(p, 'hitstun', 16); p.combo = 0; }
+        w.events.push({ type: 'shatter', pos: { ...c.pos } });
+        return false;
+      }
+    } else {
+      const e = w.enemies.find(e => targetable(e) && dist(e.pos, c.pos) < T.cup.hitRadius + 0.1);
+      if (e) {
+        damageEnemy(w, e, T.cup.deflectDamage, { x: c.pos.x - c.vel.x * 5, y: c.pos.y - c.vel.y * 5 }, 5, 0, true, c.owner, true);
+        w.hitstop = T.hitstop.bottle; w.shake = 0.25;
+        w.events.push({ type: 'hit', pos: { ...c.pos }, heavy: true, by: c.owner });
+        return false;
+      }
+    }
+    if (outOfBounds(c.pos)) { w.events.push({ type: 'shatter', pos: { ...c.pos } }); return false; }
+    return true;
+  });
+}
+
 function stepBottles(w: World) {
   for (const b of w.bottles) {
     if (b.state === 'flying') {
       b.pos.x += b.vel.x; b.pos.y += b.vel.y;
       const hit = w.enemies.find(e => alive(e) && e.state !== 'down' && dist(e.pos, b.pos) < 0.7);
       if (hit) {
-        damageEnemy(w, hit, T.bottle.damage, { x: b.pos.x - b.vel.x * 5, y: b.pos.y - b.vel.y * 5 }, 5, 0, true, b.holder);
+        damageEnemy(w, hit, T.bottle.damage, { x: b.pos.x - b.vel.x * 5, y: b.pos.y - b.vel.y * 5 }, 5, 0, true, b.holder, true);
         w.hitstop = T.hitstop.bottle; w.shake = 0.25;
         w.events.push({ type: 'hit', pos: { ...b.pos }, heavy: true, by: b.holder });
       }
-      const { minX, maxX, minY, maxY } = LEVEL.bounds;
-      const wall = b.pos.x < minX || b.pos.x > maxX || b.pos.y < minY || b.pos.y > maxY || insideObstacle(b.pos, -0.05);
-      if (hit || wall) {
+      if (hit || outOfBounds(b.pos)) {
         b.state = 'broken'; b.t = 0;
         w.events.push({ type: 'shatter', pos: { ...b.pos } });
       }
@@ -478,10 +643,36 @@ function stepBottles(w: World) {
   }
 }
 
+// Enemies knocked flying hurt themselves on tables, the fence and the walls, and bowl over
+// anyone standing in their way.
+function slams(w: World) {
+  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  for (const e of w.enemies) {
+    if (e.state !== 'down' || e.slammed || len(e.vel) < T.slam.speed) continue;
+    const r = T[e.kind].radius;
+    const wall = insideObstacle(e.pos, r * 0.6) || e.pos.x - r < minX || e.pos.x + r > maxX || e.pos.y - r < minY || e.pos.y + r > maxY;
+    if (wall) {
+      e.slammed = true;
+      e.vel = { x: 0, y: 0 };
+      e.hp -= T.slam.damage;
+      if (e.hp <= 0) { e.hp = 0; setEnemy(e, 'dead', 0); w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' }); }
+      else e.dur += T.slam.extraDown;
+      w.hitstop = T.hitstop.heavy; w.shake = 0.4;
+      w.events.push({ type: 'slam', pos: { ...e.pos } });
+      continue;
+    }
+    for (const o of w.enemies) {
+      if (o === e || !targetable(o) || o.kind === 'boss' || dist(o.pos, e.pos) > T[o.kind].radius + r) continue;
+      damageEnemy(w, o, T.slam.bowlDamage, e.pos, 4, 0, true, e.lastHitBy, true);
+      w.events.push({ type: 'hit', pos: { ...o.pos }, heavy: true, by: e.lastHitBy });
+    }
+  }
+}
+
 function separate(w: World) {
   const bodies: { pos: Vec; r: number; fixed: boolean }[] = [
-    ...w.players.filter(standing).map(p => ({ pos: p.pos, r: T.player.radius, fixed: p.state === 'counter' })),
-    ...w.enemies.filter(e => alive(e) && e.state !== 'down').map(e => ({ pos: e.pos, r: T[e.kind].radius, fixed: false })),
+    ...w.players.filter(p => standing(p) && p.state !== 'grabbed').map(p => ({ pos: p.pos, r: T.player.radius, fixed: p.state === 'counter' })),
+    ...w.enemies.filter(e => alive(e) && e.state !== 'down').map(e => ({ pos: e.pos, r: T[e.kind].radius, fixed: e.kind === 'boss' })),
   ];
   for (let i = 0; i < bodies.length; i++) {
     for (let j = i + 1; j < bodies.length; j++) {
@@ -489,7 +680,7 @@ function separate(w: World) {
       const v = sub(b.pos, a.pos), d = len(v), min = a.r + b.r;
       if (d >= min || d < 1e-6) continue;
       const push = (min - d) / 2, n = { x: v.x / d, y: v.y / d };
-      const fa = a.fixed ? 0 : b.fixed ? 2 : 1, fb = b.fixed ? 0 : a.fixed ? 2 : 1;
+      const fa = a.fixed && !b.fixed ? 0 : b.fixed && !a.fixed ? 2 : 1, fb = 2 - fa;
       a.pos.x -= n.x * push * fa; a.pos.y -= n.y * push * fa;
       b.pos.x += n.x * push * fb; b.pos.y += n.y * push * fb;
     }
@@ -519,14 +710,17 @@ export function step(w: World, inputs: Input | Input[]): World {
     for (const p of w.players) {
       const input = inputFor(p);
       const pressed: Action | null = input.counter ? 'counter' : input.dodge ? 'dodge' : input.attack ? 'attack' : input.grab ? 'grab' : null;
-      if (pressed) p.buffer = { action: pressed, frames: T.inputBuffer };
+      if (pressed && p.state === 'grabbed') p.escape++;
+      else if (pressed) p.buffer = { action: pressed, frames: T.inputBuffer };
     }
     return w;
   }
   if (w.result !== 'playing') return w;
   for (const p of w.players) stepPlayer(w, p, inputFor(p));
   stepEnemies(w);
+  stepCups(w);
   stepBottles(w);
+  slams(w);
   separate(w);
 
   if (w.enemies.every(e => !alive(e))) {
