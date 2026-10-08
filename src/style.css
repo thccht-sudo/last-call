@@ -1,0 +1,16 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b20; color: #eee; font-family: system-ui, sans-serif; }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#overlay { position: fixed; inset: 0; pointer-events: none; }
+.prompt { position: absolute; left: 0; top: 0; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 800; font-size: 18px; opacity: 0; transition: opacity 60ms; }
+.prompt.counter { opacity: 1; background: #ffd23f; color: #222; box-shadow: 0 0 14px #ffd23f; }
+.prompt.dodge { opacity: 1; background: #e23b3b; color: #fff; box-shadow: 0 0 14px #e23b3b; }
+.ebar { position: absolute; left: 0; top: 0; width: 46px; height: 5px; background: #0008; transition: opacity 200ms; }
+.ebar i { display: block; height: 100%; background: #e8e8e8; }
+#hud { position: fixed; left: 20px; top: 18px; }
+#hp { width: 260px; height: 14px; background: #0009; border: 2px solid #2bb3a3; }
+#hp i { display: block; height: 100%; background: #2bb3a3; transition: width 120ms; }
+#banner { position: fixed; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none;
+  font-size: 64px; font-weight: 900; letter-spacing: 6px; text-shadow: 0 4px 24px #000; transition: opacity 200ms; }
+#banner small { display: block; font-size: 16px; font-weight: 500; letter-spacing: 2px; margin-top: 8px; opacity: 0.8; }
+#hint { position: fixed; bottom: 14px; width: 100%; text-align: center; font-size: 14px; opacity: 0.6; }
