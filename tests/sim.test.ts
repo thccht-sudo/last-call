@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorld, spawnEnemy, step, NO_INPUT, Input, World, framesToStrike } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
+import { insideObstacle } from '../src/sim/level';
 
 const press = (k: Partial<Input>): Input => ({ ...NO_INPUT, ...k });
 const run = (w: World, n: number, input: Input = NO_INPUT) => { for (let i = 0; i < n; i++) step(w, input); };
@@ -60,8 +61,9 @@ describe('counter', () => {
 
 describe('freeflow attacks', () => {
   it('lunges to the enemy in the pushed direction', () => {
-    const { w } = duel('thug', { x: -3, y: 2 });
-    const right = spawnEnemy(w, 'thug', { x: 3, y: 2 }, 'stun');
+    const { w } = duel('thug', { x: -3, y: 3.5 });
+    w.player.pos = { x: 0, y: 3.5 };
+    const right = spawnEnemy(w, 'thug', { x: 3, y: 3.5 }, 'stun');
     right.dur = 999;
     w.enemies[0].state = 'stun'; w.enemies[0].dur = 999;
     step(w, press({ attack: true, mx: 1 }));
@@ -98,9 +100,9 @@ describe('freeflow attacks', () => {
 
 describe('bottle', () => {
   it('picks up, throws at the nearest enemy and knocks it down', () => {
-    const { w, e } = duel('thug', { x: 4, y: -3.5 });
+    const { w, e } = duel('thug', { x: 3, y: 3.2 });
     e.state = 'stun'; e.dur = 999;
-    w.player.pos = { x: -6.5, y: -3.5 };
+    w.player.pos = { x: w.bottles[0].home.x, y: w.bottles[0].home.y + 1 };
     step(w, press({ grab: true }));
     expect(w.player.holding).not.toBeNull();
     step(w, press({ grab: true, mx: 1 }));
@@ -163,6 +165,26 @@ describe('playtest bot', () => {
       const w = createWorld(seed);
       for (let i = 0; i < 60 * 300 && w.result === 'playing'; i++) step(w, bot(w));
       expect(w.result, `seed ${seed} hp ${w.player.hp}`).toBe('win');
+    }
+  });
+});
+
+describe('Kilroy\'s patio', () => {
+  it('enemies inside the patio find the gate instead of grinding on the fence', () => {
+    const { w, e } = duel('thug', { x: 5.5, y: -3.2 });
+    w.player.pos = { x: 5.5, y: 0.5 };
+    e.state = 'approach'; e.t = 0; e.dur = 600;
+    run(w, 240);
+    expect(e.pos.y).toBeGreaterThan(-2.6);
+  });
+
+  it('nobody ends up inside a table, fence or post', () => {
+    const w = createWorld(9);
+    for (let i = 0; i < 4000 && w.result === 'playing'; i++) {
+      step(w, press({ mx: Math.sin(i / 50), my: Math.cos(i / 70), attack: i % 11 === 0 }));
+      for (const b of [w.player, ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead')]) {
+        expect(insideObstacle(b.pos)).toBe(false);
+      }
     }
   });
 });

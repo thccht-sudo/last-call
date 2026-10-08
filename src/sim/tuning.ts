@@ -2,7 +2,6 @@
 
 export const TUNING = {
   fps: 60,
-  arena: { w: 18, h: 12 },
 
   player: { hp: 100, speed: 6.5, radius: 0.45 },
   inputBuffer: 8,

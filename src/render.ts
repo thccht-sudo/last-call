@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { TUNING as T } from './sim/tuning';
 import { World, Enemy, Player, GameEvent, Vec, counterable, framesToStrike } from './sim/world';
+import { buildKilroys } from './scene/kilroys';
+import { LEVEL } from './sim/level';
 
 const COLORS = { player: 0x2bb3a3, thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
 
@@ -88,39 +90,8 @@ export class Renderer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.scene.background = new THREE.Color(0x1b1b20);
-    this.scene.fog = new THREE.Fog(0x1b1b20, 25, 45);
-
-    this.scene.add(new THREE.HemisphereLight(0xdde4ff, 0x30302a, 1.1));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-    sun.position.set(-6, 14, 8);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 12, bottom: -12 });
-    this.scene.add(sun);
-
-    const { w, h } = T.arena;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ color: 0x77777c, roughness: 0.95 }));
-    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
-    this.scene.add(floor);
-    const grid = new THREE.GridHelper(Math.max(w, h), Math.max(w, h), 0x5d5d63, 0x6a6a70);
-    grid.position.y = 0.01; grid.scale.set(w / Math.max(w, h), 1, h / Math.max(w, h));
-    this.scene.add(grid);
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x55555b, roughness: 1 });
-    const wall = (x: number, z: number, sx: number, sz: number, hgt: number) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, hgt, sz), wallMat);
-      m.position.set(x, hgt / 2, z); m.castShadow = m.receiveShadow = true; this.scene.add(m);
-    };
-    wall(0, -h / 2 - 0.25, w + 1, 0.5, 2.2);
-    wall(-w / 2 - 0.25, 0, 0.5, h, 1.2);
-    wall(w / 2 + 0.25, 0, 0.5, h, 1.2);
-    wall(0, h / 2 + 0.25, w + 1, 0.5, 0.4);
-    // Two "tables" where the bottles live.
-    const tableMat = new THREE.MeshStandardMaterial({ color: 0x4a3b30 });
-    for (const [x, z] of [[-6.5, -3.5], [6.5, 3.5]]) {
-      const t = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.06, 20), tableMat);
-      t.position.set(x, 0.03, z); t.receiveShadow = true; this.scene.add(t);
-    }
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    buildKilroys(this.scene);
 
     this.scene.add(this.player.root);
     addEventListener('resize', () => this.resize());
@@ -315,9 +286,9 @@ export class Renderer {
         m.position.set(b.pos.x, 1.1, b.pos.y);
         m.rotation.x += 0.5;
       } else {
-        m.position.set(b.pos.x, 0.26, b.pos.y);
-        m.rotation.set(0, 0, 0);
-        m.position.y = 0.26 + Math.sin(w.frame * 0.08) * 0.03;
+        const onTable = b.pos.x === b.home.x && b.pos.y === b.home.y;
+        m.position.set(b.pos.x, onTable ? (LEVEL.obstacles.some(o => o.kind === 'planter' && Math.abs(o.x - b.pos.x) < o.w / 2 && Math.abs(o.y - b.pos.y) < o.h / 2) ? 0.8 : 0.99) : 0.1, b.pos.y);
+        m.rotation.set(0, 0, onTable ? 0 : Math.PI / 2);
       }
     }
 
@@ -332,10 +303,10 @@ export class Renderer {
     }
 
     const p = w.player.pos;
-    this.camTarget.lerp(new THREE.Vector3(p.x * 0.6, 0, p.y * 0.5), 0.08);
+    this.camTarget.lerp(new THREE.Vector3(p.x * 0.55, 0, p.y * 0.35), 0.08);
     const s = w.shake;
-    this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 15 + (Math.random() - 0.5) * s, this.camTarget.z + 11);
-    this.camera.lookAt(this.camTarget.x, 0.6, this.camTarget.z);
+    this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 10.5 + (Math.random() - 0.5) * s, this.camTarget.z + 12.5);
+    this.camera.lookAt(this.camTarget.x, 1.6, this.camTarget.z - 2.2);
     this.renderer.render(this.scene, this.camera);
   }
 }

@@ -1,5 +1,6 @@
 // Deterministic fight simulation. No rendering, no clock: step() advances one 60 Hz frame.
 import { TUNING as T, EnemyKind } from './tuning';
+import { LEVEL, steer, collide, insideObstacle } from './level';
 
 export interface Vec { x: number; y: number }
 
@@ -23,7 +24,7 @@ export interface Player {
 export type EnemyState = 'spawn' | 'circle' | 'approach' | 'windup' | 'active' | 'recover' | 'stun' | 'down' | 'getup' | 'dead';
 export interface Enemy {
   id: number; kind: EnemyKind; pos: Vec; facing: Vec; vel: Vec; hp: number; maxHp: number;
-  state: EnemyState; t: number; dur: number; cooldown: number; angle: number; orbit: number;
+  state: EnemyState; t: number; dur: number; cooldown: number; angle: number; orbit: number; entry: Vec;
 }
 
 export interface Bottle { id: number; home: Vec; pos: Vec; vel: Vec; state: 'ground' | 'held' | 'flying' | 'broken'; t: number }
@@ -60,37 +61,37 @@ export function createWorld(seed = 1): World {
   const w: World = {
     frame: 0, hitstop: 0, shake: 0,
     player: {
-      pos: { x: 0, y: 2 }, facing: { x: 0, y: -1 }, hp: T.player.hp,
+      pos: { ...LEVEL.playerStart }, facing: { x: 0, y: -1 }, hp: T.player.hp,
       state: 'free', t: 0, dur: 0, combo: 0, target: null, hasHit: false, chain: false,
       dodgeDir: { x: 0, y: 0 }, holding: null, smash: false, buffer: null,
     },
     enemies: [], bottles: [], wave: -1, waveTimer: 30, result: 'playing',
     events: [], rng: seed >>> 0 || 1, nextId: 1,
   };
-  for (const home of [{ x: -6.5, y: -3.5 }, { x: 6.5, y: 3.5 }]) {
+  for (const home of LEVEL.bottleSpots) {
     w.bottles.push({ id: w.nextId++, home, pos: { ...home }, vel: { x: 0, y: 0 }, state: 'ground', t: 0 });
   }
   return w;
 }
 
-export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyState = 'spawn'): Enemy {
+export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyState = 'spawn', entry: Vec = pos): Enemy {
   const k = T[kind];
   const e: Enemy = {
     id: w.nextId++, kind, pos: { ...pos }, facing: { x: 0, y: 1 }, vel: { x: 0, y: 0 },
     hp: k.hp, maxHp: k.hp, state, t: 0, dur: state === 'spawn' ? 20 : 0,
-    cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1,
+    cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
   };
   w.enemies.push(e);
   return e;
 }
 
-const DOORS: Vec[] = [{ x: -9, y: -4 }, { x: 9, y: -4 }, { x: 0, y: -6 }, { x: -9, y: 4 }, { x: 9, y: 4 }];
 
 function startWave(w: World, n: number) {
   w.wave = n;
   w.events.push({ type: 'wave', n });
   T.waves[n].enemies.forEach((kind, i) => {
-    const e = spawnEnemy(w, kind, DOORS[i % DOORS.length]);
+    const s = LEVEL.spawns[i % LEVEL.spawns.length];
+    const e = spawnEnemy(w, kind, s.from, 'spawn', s.to);
     e.dur = 20 + i * 25;
   });
 }
@@ -347,12 +348,16 @@ function stepEnemies(w: World) {
     const move = (target: Vec, speed: number) => {
       const v = sub(target, e.pos), l = len(v);
       if (l < 0.05) return;
+      if (e.state !== 'spawn' && (l > 0.6 || e.state === 'circle')) {
+        const via = steer(e.pos, target);
+        if (via !== target) { const vv = sub(via, e.pos), vl = len(vv); if (vl > 0.05) { const s = Math.min(vl, speed / T.fps); e.pos.x += vv.x / vl * s; e.pos.y += vv.y / vl * s; return; } }
+      }
       const s = Math.min(l, speed / T.fps);
       e.pos.x += v.x / l * s; e.pos.y += v.y / l * s;
     };
     switch (e.state) {
       case 'spawn':
-        move({ x: e.pos.x * 0.6, y: e.pos.y * 0.6 }, k.speed);
+        move(e.entry, k.speed);
         if (e.t >= e.dur) setEnemy(e, 'circle', 0);
         break;
       case 'circle': {
@@ -405,7 +410,9 @@ function stepBottles(w: World) {
         w.hitstop = T.hitstop.bottle; w.shake = 0.25;
         w.events.push({ type: 'hit', pos: { ...b.pos }, heavy: true });
       }
-      if (hit || Math.abs(b.pos.x) > T.arena.w / 2 || Math.abs(b.pos.y) > T.arena.h / 2) {
+      const { minX, maxX, minY, maxY } = LEVEL.bounds;
+      const wall = b.pos.x < minX || b.pos.x > maxX || b.pos.y < minY || b.pos.y > maxY || insideObstacle(b.pos, -0.05);
+      if (hit || wall) {
         b.state = 'broken'; b.t = 0;
         w.events.push({ type: 'shatter', pos: { ...b.pos } });
       }
@@ -434,10 +441,15 @@ function separate(w: World) {
       b.pos.x += n.x * push * fb; b.pos.y += n.y * push * fb;
     }
   }
-  const hw = T.arena.w / 2 - 0.5, hh = T.arena.h / 2 - 0.5;
-  for (const b of [w.player.pos, ...w.enemies.filter(e => e.state !== 'spawn').map(e => e.pos)]) {
-    b.x = Math.max(-hw, Math.min(hw, b.x));
-    b.y = Math.max(-hh, Math.min(hh, b.y));
+  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  const live = [
+    { pos: w.player.pos, r: T.player.radius },
+    ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead').map(e => ({ pos: e.pos, r: T[e.kind].radius })),
+  ];
+  for (const { pos, r } of live) {
+    collide(pos, r);
+    pos.x = Math.max(minX + r, Math.min(maxX - r, pos.x));
+    pos.y = Math.max(minY + r, Math.min(maxY - r, pos.y));
   }
 }
 
