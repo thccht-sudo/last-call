@@ -9,13 +9,14 @@ const COLORS = { thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
 
 interface Look {
   shirt: number; pants: number; skin: number; scale: number;
-  jacket?: number; hair?: number; beard?: number; glasses?: boolean;
+  jacket?: number; hair?: number; messy?: boolean; beard?: number; glasses?: boolean; collar?: number;
 }
 
-// Player 1 is Conrad (6'5"), player 2 is George (5'10"): navy suit, open light-blue collar,
-// full dark beard, dark glasses, dark swept-up hair.
+// From their photos. Player 1 is Conrad (6'5"): black collared work shirt, tousled brown hair,
+// short brown beard. Player 2 is George (5'10"): navy suit, open light-blue collar, full dark
+// beard, dark glasses, dark swept-up hair.
 export const CAST: { name: string; css: string; look: Look }[] = [
-  { name: 'CONRAD', css: '#2bb3a3', look: { shirt: 0x2bb3a3, pants: 0x2a2a30, skin: 0xe0b48a, scale: 1.1 } },
+  { name: 'CONRAD', css: '#2bb3a3', look: { shirt: 0x1e1f22, collar: 0x2c2d31, pants: 0x2b3448, skin: 0xe6b996, hair: 0x4e3524, messy: true, beard: 0x5a3b26, scale: 1.1 } },
   {
     name: 'GEORGE', css: '#6f8fe0',
     look: { jacket: 0x1f2d5a, shirt: 0xc8daf0, pants: 0x1b2340, skin: 0xe4bc98, hair: 0x2a1d16, beard: 0x3a2518, glasses: true, scale: 1.0 },
@@ -46,16 +47,32 @@ class Figure {
       const shirt = mesh(new THREE.BoxGeometry(0.16, 0.42, 0.05), new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.6 }), 1.32, this.body);
       shirt.position.z = 0.25; shirt.rotation.x = -0.12;
     }
+    if (look.collar !== undefined) {
+      // Shirt collar points either side of the neck.
+      const collarMat = new THREE.MeshStandardMaterial({ color: look.collar, roughness: 0.8 });
+      for (const sx of [-1, 1]) {
+        const c = mesh(new THREE.BoxGeometry(0.13, 0.04, 0.12), collarMat, 1.52, this.body);
+        c.position.set(sx * 0.08, 1.52, 0.17); c.rotation.set(0.5, sx * 0.5, sx * 0.35);
+      }
+    }
     if (look.hair !== undefined) {
       const hairMat = new THREE.MeshStandardMaterial({ color: look.hair, roughness: 0.9 });
       const cap = mesh(new THREE.SphereGeometry(0.2, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hairMat, 1.76, this.body);
       cap.position.z = -0.02;
-      const quiff = mesh(new THREE.SphereGeometry(0.11, 10, 6), hairMat, 1.9, this.body);
-      quiff.position.z = 0.08; quiff.scale.set(1.3, 0.6, 1);
+      if (look.messy) {
+        for (const [x, z, r] of [[-0.08, 0.06, 0.4], [0.07, 0.09, -0.3], [0.0, -0.06, 0.1], [0.12, -0.02, -0.6], [-0.13, 0.0, 0.7]]) {
+          const tuft = mesh(new THREE.SphereGeometry(0.075, 8, 6), hairMat, 1.9, this.body);
+          tuft.position.set(x, 1.89, z); tuft.scale.set(1.2, 0.55, 1); tuft.rotation.z = r;
+        }
+      } else {
+        const quiff = mesh(new THREE.SphereGeometry(0.11, 10, 6), hairMat, 1.9, this.body);
+        quiff.position.z = 0.08; quiff.scale.set(1.3, 0.6, 1);
+      }
     }
     if (look.beard !== undefined) {
       const beard = mesh(new THREE.SphereGeometry(0.16, 12, 8), new THREE.MeshStandardMaterial({ color: look.beard, roughness: 1 }), 1.6, this.body);
-      beard.position.z = 0.08; beard.scale.set(1.05, 1.1, 0.85);
+      beard.position.z = 0.08;
+      if (look.messy) { beard.position.y = 1.62; beard.scale.set(1.0, 0.85, 0.8); } else beard.scale.set(1.05, 1.1, 0.85);
     }
     if (look.glasses) {
       const frame = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.4 });
