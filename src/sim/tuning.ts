@@ -43,6 +43,8 @@ export const TUNING = {
     { maxAttackers: 2, enemies: ['thug', 'heavy', 'thug', 'thug'] },
   ] as { maxAttackers: number; enemies: ('thug' | 'heavy')[] }[],
   waveDelay: 90,
+
+  coop: { extraPerWave: 1, reviveRange: 1.3, reviveFrames: 120, reviveHp: 40, tagWindow: 45, tagMultiplier: 1.5 },
 } as const;
 
 export type EnemyKind = 'thug' | 'heavy';

@@ -5,7 +5,24 @@ import { World, Enemy, Player, GameEvent, Vec, counterable, framesToStrike } fro
 import { buildKilroys } from './scene/kilroys';
 import { LEVEL } from './sim/level';
 
-const COLORS = { player: 0x2bb3a3, thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
+const COLORS = { thug: 0xc9773a, heavy: 0x8c2f2f, skin: 0xe0b48a };
+
+interface Look {
+  shirt: number; pants: number; skin: number; scale: number;
+  jacket?: number; hair?: number; beard?: number; glasses?: boolean;
+}
+
+// Player 1 is Conrad (6'5"), player 2 is George (5'10"): navy suit, open light-blue collar,
+// full dark beard, dark glasses, dark swept-up hair.
+export const CAST: { name: string; css: string; look: Look }[] = [
+  { name: 'CONRAD', css: '#2bb3a3', look: { shirt: 0x2bb3a3, pants: 0x2a2a30, skin: 0xe0b48a, scale: 1.1 } },
+  {
+    name: 'GEORGE', css: '#6f8fe0',
+    look: { jacket: 0x1f2d5a, shirt: 0xc8daf0, pants: 0x1b2340, skin: 0xe4bc98, hair: 0x2a1d16, beard: 0x3a2518, glasses: true, scale: 1.0 },
+  },
+];
+
+const thugLook = (kind: 'thug' | 'heavy'): Look => ({ shirt: COLORS[kind], pants: 0x2a2a30, skin: COLORS.skin, scale: kind === 'heavy' ? 1.18 : 1 });
 
 class Figure {
   root = new THREE.Group();
@@ -14,16 +31,41 @@ class Figure {
   legL = new THREE.Group(); legR = new THREE.Group();
   mats: THREE.MeshStandardMaterial[] = [];
 
-  constructor(color: number, scale = 1) {
-    const cloth = new THREE.MeshStandardMaterial({ color, roughness: 0.7 });
-    const skin = new THREE.MeshStandardMaterial({ color: COLORS.skin, roughness: 0.8 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.9 });
+  constructor(look: Look) {
+    const cloth = new THREE.MeshStandardMaterial({ color: look.jacket ?? look.shirt, roughness: 0.7 });
+    const skin = new THREE.MeshStandardMaterial({ color: look.skin, roughness: 0.8 });
+    const dark = new THREE.MeshStandardMaterial({ color: look.pants, roughness: 0.9 });
     this.mats = [cloth, skin, dark];
     const mesh = (g: THREE.BufferGeometry, m: THREE.Material, y: number, parent: THREE.Object3D) => {
       const o = new THREE.Mesh(g, m); o.position.y = y; o.castShadow = true; parent.add(o); return o;
     };
     mesh(new THREE.CapsuleGeometry(0.26, 0.45, 4, 10), cloth, 1.15, this.body);
     mesh(new THREE.SphereGeometry(0.19, 14, 10), skin, 1.72, this.body);
+    if (look.jacket !== undefined) {
+      // Open collar: a wedge of shirt down the front of the jacket.
+      const shirt = mesh(new THREE.BoxGeometry(0.16, 0.42, 0.05), new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.6 }), 1.32, this.body);
+      shirt.position.z = 0.25; shirt.rotation.x = -0.12;
+    }
+    if (look.hair !== undefined) {
+      const hairMat = new THREE.MeshStandardMaterial({ color: look.hair, roughness: 0.9 });
+      const cap = mesh(new THREE.SphereGeometry(0.2, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hairMat, 1.76, this.body);
+      cap.position.z = -0.02;
+      const quiff = mesh(new THREE.SphereGeometry(0.11, 10, 6), hairMat, 1.9, this.body);
+      quiff.position.z = 0.08; quiff.scale.set(1.3, 0.6, 1);
+    }
+    if (look.beard !== undefined) {
+      const beard = mesh(new THREE.SphereGeometry(0.16, 12, 8), new THREE.MeshStandardMaterial({ color: look.beard, roughness: 1 }), 1.6, this.body);
+      beard.position.z = 0.08; beard.scale.set(1.05, 1.1, 0.85);
+    }
+    if (look.glasses) {
+      const frame = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.4 });
+      for (const x of [-0.075, 0.075]) {
+        const lens = mesh(new THREE.TorusGeometry(0.05, 0.012, 6, 14), frame, 1.75, this.body);
+        lens.position.set(x, 1.75, 0.18);
+      }
+      const bridge = mesh(new THREE.BoxGeometry(0.06, 0.012, 0.012), frame, 1.76, this.body);
+      bridge.position.z = 0.185;
+    }
     for (const [g, x] of [[this.armL, 0.36], [this.armR, -0.36]] as const) {
       g.position.set(x, 1.45, 0);
       mesh(new THREE.CapsuleGeometry(0.08, 0.5, 4, 8), cloth, -0.3, g);
@@ -36,7 +78,7 @@ class Figure {
       this.body.add(g);
     }
     this.root.add(this.body);
-    this.root.scale.setScalar(scale);
+    this.root.scale.setScalar(look.scale);
   }
 
   reset() {
@@ -76,7 +118,7 @@ export class Renderer {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
-  private player = new Figure(COLORS.player);
+  private players: { fig: Figure; tag: HTMLDivElement }[] = [];
   private enemies = new Map<number, { fig: Figure; prompt: HTMLDivElement; bar: HTMLDivElement }>();
   private bottles = new Map<number, THREE.Mesh>();
   private fx: Fx[] = [];
@@ -93,7 +135,6 @@ export class Renderer {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     buildKilroys(this.scene);
 
-    this.scene.add(this.player.root);
     addEventListener('resize', () => this.resize());
     this.resize();
   }
@@ -114,8 +155,7 @@ export class Renderer {
     return moved;
   }
 
-  private posePlayer(p: Player, w: World) {
-    const f = this.player;
+  private posePlayer(p: Player, f: Figure, w: World) {
     f.reset();
     f.place(p.pos, p.facing);
     const moved = this.stride(p, p.pos);
@@ -157,7 +197,7 @@ export class Renderer {
       case 'hitstun':
         f.body.rotation.x = 0.35 * (1 - k(20)); f.armL.rotation.x = -0.3; f.armR.rotation.x = -0.3;
         break;
-      case 'dead':
+      case 'down':
         f.lieDown(1);
         break;
     }
@@ -227,24 +267,57 @@ export class Renderer {
     this.enemies.clear();
   }
 
+  private screen(x: number, y: number, z: number) {
+    const v = new THREE.Vector3(x, y, z).project(this.camera);
+    return { sx: (v.x * 0.5 + 0.5) * innerWidth, sy: (-v.y * 0.5 + 0.5) * innerHeight };
+  }
+
+  private popup(pos: Vec, text: string) {
+    const el = document.createElement('div');
+    el.className = 'popup'; el.textContent = text;
+    const { sx, sy } = this.screen(pos.x, 2.6, pos.y);
+    el.style.left = `${sx}px`; el.style.top = `${sy}px`;
+    this.overlay.append(el);
+    setTimeout(() => el.remove(), 900);
+  }
+
   events(evts: GameEvent[]) {
     for (const ev of evts) {
       if (ev.type === 'hit') this.burst(ev.pos, 0xffffff, ev.heavy ? 0.35 : 0.22, ev.heavy ? 10 : 7);
       if (ev.type === 'counter') this.burst(ev.pos, 0xffd23f, 0.45, 12);
       if (ev.type === 'playerHit') this.burst(ev.pos, 0xff4040, 0.3, 9);
       if (ev.type === 'shatter') this.shards(ev.pos);
+      if (ev.type === 'tag') this.popup(ev.pos, 'TAG TEAM!');
     }
   }
 
   draw(w: World) {
-    this.posePlayer(w.player, w);
+    w.players.forEach((p, i) => {
+      let v = this.players[i];
+      if (!v) {
+        const fig = new Figure(CAST[i].look);
+        this.scene.add(fig.root);
+        const tag = document.createElement('div'); tag.className = 'nametag';
+        tag.style.setProperty('--c', CAST[i].css);
+        this.overlay.append(tag);
+        v = this.players[i] = { fig, tag };
+      }
+      if (w.hitstop === 0) this.posePlayer(p, v.fig, w);
+      const { sx, sy } = this.screen(p.pos.x, p.state === 'down' ? 0.9 : 2.25 * CAST[i].look.scale, p.pos.y);
+      v.tag.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -100%)`;
+      const reviving = p.state === 'down' && p.revive > 0;
+      v.tag.textContent = p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
+      v.tag.classList.toggle('down', p.state === 'down');
+    });
+    for (let i = w.players.length; i < this.players.length; i++) { this.scene.remove(this.players[i].fig.root); this.players[i].tag.remove(); }
+    this.players.length = Math.min(this.players.length, w.players.length);
 
     const seen = new Set<number>();
     for (const e of w.enemies) {
       seen.add(e.id);
       let v = this.enemies.get(e.id);
       if (!v) {
-        const fig = new Figure(COLORS[e.kind], e.kind === 'heavy' ? 1.18 : 1);
+        const fig = new Figure(thugLook(e.kind));
         this.scene.add(fig.root);
         const prompt = document.createElement('div'); prompt.className = 'prompt';
         const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
@@ -257,7 +330,7 @@ export class Renderer {
       const head = new THREE.Vector3(e.pos.x, e.kind === 'heavy' ? 2.6 : 2.25, e.pos.y).project(this.camera);
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
       const strike = framesToStrike(e);
-      const canCounter = counterable(w, e);
+      const canCounter = w.players.some(p => counterable(p, e));
       const mustDodge = e.kind === 'heavy' && strike !== null && strike <= T.counter.window;
       v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
       v.prompt.textContent = canCounter ? 'Y' : mustDodge ? 'A' : '';
@@ -278,7 +351,7 @@ export class Renderer {
       }
       m.visible = b.state !== 'broken';
       if (b.state === 'held') {
-        const p = w.player;
+        const p = w.players[b.holder];
         const side = { x: -p.facing.y, y: p.facing.x };
         m.position.set(p.pos.x + p.facing.x * 0.3 - side.x * 0.4, 1.0, p.pos.y + p.facing.y * 0.3 - side.y * 0.4);
         m.rotation.set(0, 0, 0);
@@ -302,8 +375,9 @@ export class Renderer {
       if (f.life <= 0) { this.scene.remove(f.mesh); this.fx.splice(i, 1); }
     }
 
-    const p = w.player.pos;
-    this.camTarget.lerp(new THREE.Vector3(p.x * 0.55, 0, p.y * 0.35), 0.08);
+    const up = w.players.filter(p => p.state !== 'down');
+    const focus = (up.length ? up : w.players).reduce((a, p, _, all) => ({ x: a.x + p.pos.x / all.length, y: a.y + p.pos.y / all.length }), { x: 0, y: 0 });
+    this.camTarget.lerp(new THREE.Vector3(focus.x * 0.55, 0, focus.y * 0.35), 0.08);
     const s = w.shake;
     this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 10.5 + (Math.random() - 0.5) * s, this.camTarget.z + 12.5);
     this.camera.lookAt(this.camTarget.x, 1.6, this.camTarget.z - 2.2);

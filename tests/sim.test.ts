@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, spawnEnemy, step, NO_INPUT, Input, World, framesToStrike } from '../src/sim/world';
+import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
 import { insideObstacle } from '../src/sim/level';
 
@@ -11,7 +11,7 @@ function duel(kind: 'thug' | 'heavy' = 'thug', at = { x: 0, y: 0.8 }) {
   const w = createWorld(7);
   w.wave = 0; w.waveTimer = 1e9;
   const e = spawnEnemy(w, kind, at, 'circle');
-  w.player.pos = { x: 0, y: 2 };
+  w.players[0].pos = { x: 0, y: 2 };
   return { w, e };
 }
 
@@ -32,16 +32,16 @@ describe('counter', () => {
     step(w, press({ counter: true }));
     expect(e.state).toBe('down');
     run(w, 60);
-    expect(w.player.hp).toBe(T.player.hp);
+    expect(w.players[0].hp).toBe(T.player.hp);
   });
 
   it('pressing counter too early whiffs and the hit lands', () => {
     const { w, e } = duel();
     untilStrikeIn(w, e, T.counter.window + 8);
     step(w, press({ counter: true }));
-    expect(w.player.state).toBe('whiff');
+    expect(w.players[0].state).toBe('whiff');
     run(w, 40);
-    expect(w.player.hp).toBe(T.player.hp - T.thug.damage);
+    expect(w.players[0].hp).toBe(T.player.hp - T.thug.damage);
   });
 
   it('a heavy cannot be countered, but a dodge avoids it', () => {
@@ -49,26 +49,26 @@ describe('counter', () => {
     untilStrikeIn(a.w, a.e, 8);
     step(a.w, press({ counter: true }));
     run(a.w, 40);
-    expect(a.w.player.hp).toBe(T.player.hp - T.heavy.damage);
+    expect(a.w.players[0].hp).toBe(T.player.hp - T.heavy.damage);
 
     const b = duel('heavy');
     untilStrikeIn(b.w, b.e, 6);
     step(b.w, press({ dodge: true, mx: 1 }));
     run(b.w, 40);
-    expect(b.w.player.hp).toBe(T.player.hp);
+    expect(b.w.players[0].hp).toBe(T.player.hp);
   });
 });
 
 describe('freeflow attacks', () => {
   it('lunges to the enemy in the pushed direction', () => {
     const { w } = duel('thug', { x: -3, y: 3.5 });
-    w.player.pos = { x: 0, y: 3.5 };
+    w.players[0].pos = { x: 0, y: 3.5 };
     const right = spawnEnemy(w, 'thug', { x: 3, y: 3.5 }, 'stun');
     right.dur = 999;
     w.enemies[0].state = 'stun'; w.enemies[0].dur = 999;
     step(w, press({ attack: true, mx: 1 }));
     run(w, 6);
-    expect(w.player.pos.x).toBeGreaterThan(1.5);
+    expect(w.players[0].pos.x).toBeGreaterThan(1.5);
     expect(right.hp).toBeLessThan(T.thug.hp);
   });
 
@@ -102,9 +102,9 @@ describe('bottle', () => {
   it('picks up, throws at the nearest enemy and knocks it down', () => {
     const { w, e } = duel('thug', { x: 3, y: 3.2 });
     e.state = 'stun'; e.dur = 999;
-    w.player.pos = { x: w.bottles[0].home.x, y: w.bottles[0].home.y + 1 };
+    w.players[0].pos = { x: w.bottles[0].home.x, y: w.bottles[0].home.y + 1 };
     step(w, press({ grab: true }));
-    expect(w.player.holding).not.toBeNull();
+    expect(w.players[0].holding).not.toBeNull();
     step(w, press({ grab: true, mx: 1 }));
     run(w, 60);
     expect(e.state).toBe('down');
@@ -141,30 +141,32 @@ describe('crowd', () => {
   });
 });
 
-describe('playtest bot', () => {
-  // Counters yellow prompts, dodges red ones, otherwise attacks the nearest enemy.
-  function bot(w: World): Input {
-    const p = w.player;
-    for (const e of w.enemies) {
-      const f = framesToStrike(e);
-      const d = Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
-      if (f !== null && f <= 12 && d < T.counter.range) {
-        if (T[e.kind].armored) return press({ dodge: true, mx: p.pos.x - e.pos.x, my: p.pos.y - e.pos.y });
-        return press({ counter: true });
-      }
+// Counters yellow prompts, dodges red ones, otherwise attacks the nearest enemy.
+function botFor(w: World, i: number): Input {
+  const p = w.players[i];
+  for (const e of w.enemies) {
+    const f = framesToStrike(e);
+    const d = Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
+    if (f !== null && f <= 12 && d < T.counter.range) {
+      if (T[e.kind].armored) return press({ dodge: true, mx: p.pos.x - e.pos.x, my: p.pos.y - e.pos.y });
+      return press({ counter: true });
     }
-    const live = w.enemies.filter(e => e.state !== 'dead' && e.state !== 'spawn' && e.state !== 'down' && e.state !== 'getup');
-    if (!live.length) return NO_INPUT;
-    live.sort((a, b) => Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y) - Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y));
-    const t = live[0], mx = t.pos.x - p.pos.x, my = t.pos.y - p.pos.y;
-    return press({ mx, my, attack: w.frame % 7 === 0 });
   }
+  const down = w.players.find(o => o.state === 'down');
+  if (down && down !== p) return press({ mx: down.pos.x - p.pos.x, my: down.pos.y - p.pos.y });
+  const live = w.enemies.filter(e => e.state !== 'dead' && e.state !== 'spawn' && e.state !== 'down' && e.state !== 'getup');
+  if (!live.length) return NO_INPUT;
+  live.sort((a, b) => Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y) - Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y));
+  const t = live[0];
+  return press({ mx: t.pos.x - p.pos.x, my: t.pos.y - p.pos.y, attack: (w.frame + i * 3) % 7 === 0 });
+}
 
+describe('playtest bot', () => {
   it('a player who reads prompts clears the bar', () => {
     for (const seed of [1, 2, 3, 4, 5]) {
       const w = createWorld(seed);
-      for (let i = 0; i < 60 * 300 && w.result === 'playing'; i++) step(w, bot(w));
-      expect(w.result, `seed ${seed} hp ${w.player.hp}`).toBe('win');
+      for (let i = 0; i < 60 * 300 && w.result === 'playing'; i++) step(w, botFor(w, 0));
+      expect(w.result, `seed ${seed} hp ${w.players[0].hp}`).toBe('win');
     }
   });
 });
@@ -172,7 +174,7 @@ describe('playtest bot', () => {
 describe('Kilroy\'s patio', () => {
   it('enemies inside the patio find the gate instead of grinding on the fence', () => {
     const { w, e } = duel('thug', { x: 5.5, y: -3.2 });
-    w.player.pos = { x: 5.5, y: 0.5 };
+    w.players[0].pos = { x: 5.5, y: 0.5 };
     e.state = 'approach'; e.t = 0; e.dur = 600;
     run(w, 240);
     expect(e.pos.y).toBeGreaterThan(-2.6);
@@ -182,9 +184,78 @@ describe('Kilroy\'s patio', () => {
     const w = createWorld(9);
     for (let i = 0; i < 4000 && w.result === 'playing'; i++) {
       step(w, press({ mx: Math.sin(i / 50), my: Math.cos(i / 70), attack: i % 11 === 0 }));
-      for (const b of [w.player, ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead')]) {
+      for (const b of [w.players[0], ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead')]) {
         expect(insideObstacle(b.pos)).toBe(false);
       }
+    }
+  });
+});
+
+describe('co-op', () => {
+  function pair() {
+    const w = createWorld(7, 2);
+    w.wave = 0; w.waveTimer = 1e9;
+    w.players[0].pos = { x: -1, y: 1 }; w.players[1].pos = { x: 1, y: 1 };
+    return w;
+  }
+
+  it('player 2 can join mid-fight and fights with their own input', () => {
+    const w = createWorld(7);
+    w.wave = 0; w.waveTimer = 1e9;
+    addPlayer(w);
+    const e = spawnEnemy(w, 'thug', { x: w.players[1].pos.x + 1, y: w.players[1].pos.y }, 'stun');
+    e.dur = 999;
+    step(w, [NO_INPUT, press({ attack: true, mx: 1 })]);
+    run(w, 8);
+    expect(e.hp).toBeLessThan(T.thug.hp);
+    expect(w.players[0].state).toBe('free');
+  });
+
+  it('a downed player is revived by standing next to them, and the game ends only when both are down', () => {
+    const w = pair();
+    const [a, b] = w.players;
+    a.hp = 0; a.state = 'down';
+    expect(w.result).toBe('playing');
+    b.pos = { x: a.pos.x + 1, y: a.pos.y };
+    run(w, T.coop.reviveFrames + 2);
+    expect(a.state).toBe('free');
+    expect(a.hp).toBe(T.coop.reviveHp);
+  });
+
+  it('losing both players loses the fight', () => {
+    const w = createWorld(5, 2);
+    run(w, 60 * 180);
+    expect(w.result).toBe('lose');
+  });
+
+  it('you can counter a swing aimed at your partner', () => {
+    const w = pair();
+    const e = spawnEnemy(w, 'thug', { x: 1, y: -0.2 }, 'approach');
+    e.dur = 180;
+    for (let i = 0; i < 400 && !(framesToStrike(e) !== null && framesToStrike(e)! <= 10); i++) step(w, NO_INPUT);
+    expect(e.focus).toBe(1);
+    w.players[0].pos = { x: 0, y: 0.2 };
+    step(w, [press({ counter: true }), NO_INPUT]);
+    expect(e.state).toBe('down');
+  });
+
+  it('tag-team hits land harder', () => {
+    const w = pair();
+    const e = spawnEnemy(w, 'heavy', { x: 0, y: 0 }, 'stun');
+    e.dur = 999;
+    step(w, [press({ attack: true, mx: 1 }), NO_INPUT]);
+    run(w, 10);
+    const afterFirst = e.hp;
+    step(w, [NO_INPUT, press({ attack: true, mx: -1 })]);
+    run(w, 10);
+    expect(afterFirst - e.hp).toBe(Math.round(T.combo[0].damage * T.coop.tagMultiplier));
+  });
+
+  it('two prompt-reading players clear the bigger co-op waves', () => {
+    for (const seed of [1, 2, 3]) {
+      const w = createWorld(seed, 2);
+      for (let i = 0; i < 60 * 300 && w.result === 'playing'; i++) step(w, w.players.map(p => botFor(w, p.index)));
+      expect(w.result, `seed ${seed}`).toBe('win');
     }
   });
 });
