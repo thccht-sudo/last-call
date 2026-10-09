@@ -563,3 +563,49 @@ describe('combos', () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
+
+describe('evade', () => {
+  it('with the stick left alone, steps back from the enemy and keeps facing him', () => {
+    const { w, e } = dummy();
+    const p = w.players[0];
+    const before = Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
+    step(w, press({ dodge: true }));
+    expect(p.dodgeKind).toBe('back');
+    run(w, 20);
+    const to = { x: e.pos.x - p.pos.x, y: e.pos.y - p.pos.y };
+    expect(Math.hypot(to.x, to.y)).toBeGreaterThan(before + 1.5);
+    expect(p.facing.x * to.x + p.facing.y * to.y).toBeGreaterThan(0.9 * Math.hypot(to.x, to.y));
+  });
+
+  it('pushing across the enemy is a sidestep that keeps him in front', () => {
+    const { w } = dummy();
+    step(w, press({ dodge: true, mx: 1 }));
+    expect(w.players[0].dodgeKind).toBe('side');
+    expect(w.players[0].facing.y).toBeLessThan(-0.9); // still looking up the screen at him
+  });
+
+  it('most of the distance is covered early, and it stops without sliding', () => {
+    const w = createWorld(1);
+    w.wave = 0; w.waveTimer = 1e9;
+    const p = w.players[0];
+    const x0 = p.pos.x;
+    step(w, press({ dodge: true, mx: 1 }));
+    run(w, Math.round(T.dodge.dash.frames / 2) - 1);
+    const half = p.pos.x - x0;
+    run(w, T.dodge.dash.frames);
+    expect(half / (p.pos.x - x0)).toBeGreaterThan(0.65);
+    expect(p.pos.x - x0).toBeCloseTo(T.dodge.dash.distance, 1);
+  });
+
+  it('dodging through a red lunge at the last moment is a perfect evade that powers up the knee', () => {
+    const { w, e } = duel('kicker', { x: 0, y: -1.2 });
+    w.players[0].pos = { x: 0, y: 2.2 };
+    e.attack = 'flyingKnee'; e.state = 'approach'; e.t = 0; e.dur = 180;
+    for (let i = 0; i < 300 && framesToStrike(e) !== 1; i++) step(w, NO_INPUT);
+    step(w, press({ dodge: true, mx: 1 }));
+    expect(w.events.some(ev => ev.type === 'perfect')).toBe(true);
+    run(w, 20);
+    expect(w.players[0].hp).toBe(T.player.hp);
+    expect(w.stats[0].perfects).toBe(1);
+  });
+});

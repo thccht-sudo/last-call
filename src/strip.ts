@@ -40,9 +40,15 @@ for (const [name, a] of Object.entries(T.attacks)) {
     },
   };
 }
+function dodgeMove(kind: 'side' | 'back' | 'dash', dir: { x: number; y: number }) {
+  const d = T.dodge[kind];
+  return { total: d.frames, pose: (t: number) => { Object.assign(p, { state: 'dodge', t, dur: d.frames, dodgeKind: kind, dodgeDir: dir, facing: { x: 0, y: 1 } }); return playerPose(p, w, still); } };
+}
 Object.assign(MOVES, {
   counter: { total: T.counter.frames, pose: (t: number) => { Object.assign(p, { state: 'counter', t, dur: T.counter.frames }); return playerPose(p, w, still); } },
-  dodge: { total: T.dodge.frames, pose: (t: number) => { Object.assign(p, { state: 'dodge', t, dur: T.dodge.frames }); return playerPose(p, w, still); } },
+  'dodge-side': dodgeMove('side', { x: 1, y: 0 }),
+  'dodge-back': dodgeMove('back', { x: 0, y: -1 }),
+  'dodge-dash': dodgeMove('dash', { x: 0, y: 1 }),
   hitstun: { total: 20, pose: (t: number) => { Object.assign(p, { state: 'hitstun', t, dur: 20 }); return playerPose(p, w, still); } },
   run: { total: 40, pose: (t: number) => { Object.assign(p, { state: 'free' }); return playerPose(p, w, { distance: t * T.player.speed / 60, speed: 1 }); } },
   swagger: { total: 60, pose: (t: number) => { Object.assign(e, { state: 'circle', kind: 'thug' }); return enemyPose(e, w, { distance: t * 2 / 60, speed: 0.6 }); } },

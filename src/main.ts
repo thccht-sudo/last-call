@@ -21,7 +21,8 @@ let settings: Settings = loadSettings();
 let world: World = createWorld(Date.now(), 1, settings.difficulty);
 let started = false;
 let paused = false;
-let slowUntil = 0; // real time until which the finisher runs in slow motion
+let slowUntil = 0; // real time until which the fight runs in slow motion
+let slowScale = 0.25;
 const fps = new Fps();
 
 function applySettings(s: Settings) {
@@ -125,6 +126,11 @@ function react(events: GameEvent[], w: World) {
     if (ev.type === 'slam') { sfx.hit(true); rumble(0, 0.8, 0.8, 150); rumble(1, 0.8, 0.8, 150); }
     if (ev.type === 'deflect') { sfx.counter(); rumble(ev.by, 0.6, 0.6, 100); }
     if (ev.type === 'throw') sfx.whiff();
+    if (ev.type === 'perfect') {
+      // Perfect evade: a beat of slow motion, unless a finisher's already slowing things down.
+      if (performance.now() > slowUntil) { slowUntil = performance.now() + 420; slowScale = 0.3; }
+      sfx.perfect(); rumble(ev.by, 0.3, 0.8, 90);
+    }
     if (ev.type === 'launch') { sfx.launch(); if (ev.by >= 0) rumble(ev.by, 0.6, 0.8, 120); }
     if (ev.type === 'spike') { sfx.spike(); rumble(0, 0.9, 0.9, 180); rumble(1, 0.9, 0.9, 180); voice(VOICE.floored, { chance: 0.5 }); }
     if (ev.type === 'swing' && T.attacks[ev.attack].red) sfx.warn();
@@ -163,7 +169,7 @@ function finisher(events: GameEvent[], w: World) {
   const ko = events.find(e => e.type === 'ko');
   if (!ko || ko.type !== 'ko') return;
   if (!ko.boss && w.enemies.some(e => e.state !== 'dead')) return;
-  slowUntil = performance.now() + 1400;
+  slowUntil = performance.now() + 1400; slowScale = 0.25;
   renderer.punch(ko.pos, 1400);
 }
 
@@ -285,6 +291,7 @@ function restart() {
 function tick() {
   clock++;
   if (guest) guestTick(); else hostTick();
+  if (!paused) renderer.update(world);
   if (clock >= bannerUntil) say('');
 }
 
@@ -293,7 +300,7 @@ let acc = 0, last = performance.now();
 let qualityCheckedAt = 0;
 function frame(now: number) {
   // Slow motion: the simulation runs at a quarter speed for the finisher.
-  acc += Math.min(100, now - last) * (now < slowUntil ? 0.25 : 1);
+  acc += Math.min(100, now - last) * (now < slowUntil ? slowScale : 1);
   last = now;
   // Automatic quality: if the frame rate sags during a fight, drop shadows, then resolution.
   if (fps.tick(settings.fps) && started && settings.quality === 'auto' && fps.value < 48 && now - qualityCheckedAt > 3000 && renderer.quality < 2) {
@@ -301,7 +308,9 @@ function frame(now: number) {
     renderer.setQuality(renderer.quality + 1);
   }
   if (started && world.result === 'playing' && !paused) tips(world, controls.isPad(0));
-  while (acc >= DT) { tick(); acc -= DT; }
+  // A little slack stops vsync jitter from alternating zero- and two-tick frames at 60 Hz.
+  while (acc >= DT - 1) { tick(); acc -= DT; }
+  acc = Math.max(0, acc);
   bars.forEach((bar, i) => {
     const p = world.players[i];
     bar.classList.toggle('waiting', !p);
@@ -315,7 +324,7 @@ function frame(now: number) {
     : guest
       ? 'WASD or arrows to move · J attack · K counter · Space dodge · E bottle'
       : 'P1: WASD · J attack · K counter · Space dodge · E bottle  |  P2: arrows · numpad 1 attack · 2 counter · 0 dodge · 3 bottle';
-  renderer.draw(world);
+  renderer.draw(world, Math.min(1, acc / DT));
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

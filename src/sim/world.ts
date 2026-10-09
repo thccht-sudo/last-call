@@ -12,6 +12,7 @@ export const NO_INPUT: Input = { mx: 0, my: 0, attack: false, counter: false, do
 
 type Action = 'attack' | 'counter' | 'dodge' | 'bottle';
 
+export type DodgeKind = 'side' | 'back' | 'dash';
 export type PlayerState = 'free' | 'attack' | 'counter' | 'whiff' | 'dodge' | 'hitstun' | 'down';
 export interface Player {
   index: number; revive: number; // frames a partner has spent reviving this player
@@ -22,7 +23,8 @@ export interface Player {
   combo: number; comboAt: number; // string hits landed (jab, cross) and the frame of the last one
   counterAt: number; dodgeEnd: number; // for riposte and flying-knee follow-ups
   hits: number; lastHitAt: number; // running hit counter for the HUD
-  dodgeDir: Vec; holding: number | null;
+  stop: number; hitDir: Vec; // frames frozen in hitstop, and which way the hit came from
+  dodgeDir: Vec; dodgeKind: DodgeKind; perfectAt: number; holding: number | null;
   buffer: { action: Action; frames: number; mx: number; my: number } | null; // a press waiting to happen, with the stick as it was
 }
 
@@ -37,6 +39,7 @@ export interface Enemy {
   z: number; vz: number; juggle: number; // height off the floor while launched, and air hits taken
   string: number; // boss: position in his hook, elbow, haymaker string
   enraged: boolean; slammed: boolean; stomped: boolean;
+  stop: number; hitDir: Vec; // hitstop frames left, and the direction of the hit (for the shake)
 }
 
 export interface Bottle { id: number; home: Vec; pos: Vec; vel: Vec; state: 'ground' | 'held' | 'flying' | 'broken'; t: number; holder: number }
@@ -62,6 +65,7 @@ export type GameEvent =
   | { type: 'throw'; pos: Vec }
   | { type: 'shatter'; pos: Vec }
   | { type: 'dodge'; by: number }
+  | { type: 'perfect'; pos: Vec; by: number }
   | { type: 'wave'; n: number }
   | { type: 'stage'; stage: number }
   | { type: 'ko'; pos: Vec; boss: boolean };
@@ -70,9 +74,9 @@ export type GameEvent =
 export interface Stats {
   dealt: number; taken: number; takenBy: Record<string, number>;
   missedCounters: number; counters: number; deflects: number; whiffs: number; dodges: number;
-  slams: number; kos: number; downs: number; launches: number; bestCombo: number;
+  slams: number; kos: number; downs: number; launches: number; bestCombo: number; perfects: number;
 }
-const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0, launches: 0, bestCombo: 0 });
+const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0, launches: 0, bestCombo: 0, perfects: 0 });
 
 export interface World {
   frame: number; hitstop: number; shake: number;
@@ -97,8 +101,8 @@ function newPlayer(index: number, pos: Vec): Player {
   return {
     index, revive: 0, pos: { ...pos }, facing: { x: 0, y: -1 }, hp: T.player.hp,
     state: 'free', t: 0, dur: 0, move: 'jab', lead: 0, target: null, hasHit: false,
-    combo: 0, comboAt: -999, counterAt: -999, dodgeEnd: -999, hits: 0, lastHitAt: -999,
-    dodgeDir: { x: 0, y: 0 }, holding: null, buffer: null,
+    combo: 0, comboAt: -999, counterAt: -999, dodgeEnd: -999, hits: 0, lastHitAt: -999, stop: 0, hitDir: { x: 0, y: 0 },
+    dodgeDir: { x: 0, y: 0 }, dodgeKind: 'dash', perfectAt: -999, holding: null, buffer: null,
   };
 }
 
@@ -134,7 +138,7 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
     hp: Math.round(k.hp * mods(w).enemyHp), maxHp: Math.round(k.hp * mods(w).enemyHp), state, t: 0, dur: state === 'spawn' ? 20 : 0,
     cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
     focus: 0, lastHitBy: -1, lastHitFrame: -999, attack: k.moves[0], unblockable: false, connected: false,
-    z: 0, vz: 0, juggle: 0, string: 0, enraged: false, slammed: false, stomped: false,
+    z: 0, vz: 0, juggle: 0, string: 0, enraged: false, slammed: false, stomped: false, stop: 0, hitDir: { x: 0, y: 0 },
   };
   w.enemies.push(e);
   return e;
@@ -195,6 +199,20 @@ export function pickTarget(w: World, p: Player, dir: Vec, range: number, sticky 
   return best;
 }
 
+// Who a dodge is about: the closest enemy swinging at this player, else the closest standing one.
+function dodgeThreat(w: World, p: Player): Enemy | null {
+  let best: Enemy | null = null, bestScore = Infinity;
+  for (const e of w.enemies) {
+    if (!targetable(e)) continue;
+    const d = dist(e.pos, p.pos);
+    if (d > T.dodge.threatRange) continue;
+    const swinging = (e.state === 'windup' || e.state === 'active') && e.focus === p.index;
+    const score = d - (swinging ? 4 : 0);
+    if (score < bestScore) { bestScore = score; best = e; }
+  }
+  return best;
+}
+
 const stickHeld = (input: Input) => Math.hypot(input.mx, input.my) > 0.3;
 function stickDir(input: Input, fallback: Vec): Vec {
   return stickHeld(input) ? norm({ x: input.mx, y: input.my }) : fallback;
@@ -205,7 +223,7 @@ function setEnemy(e: Enemy, state: EnemyState, dur: number) { e.state = state; e
 
 const playerInvulnerable = (p: Player) =>
   p.state === 'counter' || p.state === 'down' ||
-  (p.state === 'dodge' && p.t >= T.dodge.invulnFrom && p.t <= T.dodge.invulnTo);
+  (p.state === 'dodge' && p.t >= T.dodge[p.dodgeKind].invulnFrom && p.t <= T.dodge[p.dodgeKind].invulnTo);
 
 export const standing = (p: Player) => p.state !== 'down';
 
@@ -364,15 +382,36 @@ function chooseAttack(w: World, p: Player, input: Input): { move: MoveName; targ
   const toPrev = prev ? norm(sub(prev.pos, p.pos)) : p.facing;
   const pulledBack = stickHeld(input) && dot(norm({ x: input.mx, y: input.my }), toPrev) < -0.4;
   const target = pulledBack ? prev : t;
+  if (pulledBack) return { move: 'sweep', target };
   if (w.frame - p.comboAt >= T.string.delay) return { move: 'uppercut', target };
-  return { move: pulledBack ? 'sweep' : 'roundhouse', target };
+  return { move: 'roundhouse', target };
 }
 
 function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
   const dir = stickDir(input, p.facing);
   if (action === 'dodge') {
-    p.dodgeDir = dir; p.facing = dir;
-    setPlayer(p, 'dodge', T.dodge.frames);
+    // Keep facing the most pressing threat and step relative to him.
+    const threat = dodgeThreat(w, p);
+    p.dodgeDir = dir;
+    if (threat) {
+      const to = norm(sub(threat.pos, p.pos));
+      p.facing = to;
+      // Stick left alone: step back from him.
+      if (!stickHeld(input)) p.dodgeDir = { x: -to.x, y: -to.y };
+      const along = dot(p.dodgeDir, to);
+      p.dodgeKind = along > 0.6 ? 'dash' : along < -0.6 ? 'back' : 'side';
+    } else { p.facing = dir; p.dodgeKind = 'dash'; }
+    setPlayer(p, 'dodge', T.dodge[p.dodgeKind].frames);
+    // A perfect evade: dodging just before a swing aimed at you would land.
+    const dodged = w.enemies.find(e => {
+      const f = framesToStrike(e), at = T.attacks[e.attack];
+      return f !== null && f <= T.dodge.perfectWindow && e.focus === p.index && e.attack !== 'throw' && dist(e.pos, p.pos) <= at.reach + at.lunge + 0.5;
+    });
+    if (dodged) {
+      p.perfectAt = w.frame;
+      w.stats[p.index].perfects++;
+      w.events.push({ type: 'perfect', pos: { ...p.pos }, by: p.index });
+    }
     w.stats[p.index].dodges++;
     w.events.push({ type: 'dodge', by: p.index });
     return true;
@@ -387,7 +426,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
       cup.owner = p.index;
       p.facing = n;
       setPlayer(p, 'counter', T.counter.frames - 8);
-      w.hitstop = T.hitstop.light; w.shake = 0.15;
+      p.stop = T.hitstop.light; w.shake = 0.15;
       w.stats[p.index].deflects++;
       w.events.push({ type: 'deflect', pos: { ...cup.pos }, by: p.index });
       return true;
@@ -461,8 +500,9 @@ function canAct(p: Player, action: Action): boolean {
       return t >= m.startup + m.active + (p.hasHit ? 0 : T.whiffRecovery);
     }
     case 'counter': return p.t >= (action === 'attack' ? T.counter.cancel : p.dur - 8);
-    case 'dodge': return action === 'attack' ? p.t >= T.followUp.dodgeFrom : action === 'counter' && p.t > T.dodge.invulnTo;
+    case 'dodge': return action === 'attack' ? p.t >= T.followUp.dodgeFrom : action === 'counter' && p.t > T.dodge[p.dodgeKind].invulnTo;
     case 'hitstun': return action === 'dodge' && p.t >= T.hurt.breakout;
+    case 'whiff': return action === 'dodge' && p.t >= T.hurt.breakout - 2;
     default: return false;
   }
 }
@@ -471,10 +511,17 @@ const pressedAction = (input: Input): Action | null =>
   input.counter ? 'counter' : input.dodge ? 'dodge' : input.attack ? 'attack' : input.bottle ? 'bottle' : null;
 
 function stepPlayer(w: World, p: Player, input: Input) {
-  p.t++;
   const pressed = pressedAction(input);
+  if (p.stop > 0) {
+    // Frozen in hitstop: hold presses for when it ends so combos stay responsive.
+    p.stop--;
+    if (pressed && standing(p)) p.buffer = { action: pressed, frames: T.inputBuffer, mx: input.mx, my: input.my };
+    return;
+  }
+  p.t++;
 
   if (p.state === 'down') {
+    p.buffer = null;
     const helper = w.players.find(o => o !== p && standing(o) && dist(o.pos, p.pos) <= T.coop.reviveRange);
     p.revive = helper ? p.revive + 1 : Math.max(0, p.revive - 2);
     if (p.revive >= T.coop.reviveFrames) {
@@ -532,9 +579,10 @@ function stepPlayer(w: World, p: Player, input: Input) {
       break;
     }
     case 'dodge': {
-      const per = T.dodge.distance / T.dodge.frames;
-      const ease = 1.6 - (p.t / T.dodge.frames) * 1.2;
-      p.pos.x += p.dodgeDir.x * per * ease; p.pos.y += p.dodgeDir.y * per * ease;
+      // Ease-out: distance(u) = D (1 - (1 - u)^2), so it leaves fast and lands without sliding.
+      const d = T.dodge[p.dodgeKind], at = (u: number) => d.distance * (1 - (1 - Math.max(0, Math.min(1, u))) ** 2);
+      const stepLen = at(p.t / d.frames) - at((p.t - 1) / d.frames);
+      p.pos.x += p.dodgeDir.x * stepLen; p.pos.y += p.dodgeDir.y * stepLen;
       if (p.t >= p.dur) { p.dodgeEnd = w.frame; setPlayer(p, 'free', 0); }
       break;
     }
@@ -548,6 +596,8 @@ function stepPlayer(w: World, p: Player, input: Input) {
 // in a cone in front within the move's reach is hit too.
 function landHits(w: World, p: Player, target: Enemy | undefined) {
   const m = T.moves[p.move];
+  // A juggle or spike whose man has already landed hits nobody else.
+  if (!target && (p.move === 'juggle' || p.move === 'spike')) return;
   const victims: Enemy[] = [];
   if (target && dist(target.pos, p.pos) <= T.lockReach + T[target.kind].radius - 0.45) victims.push(target);
   // Launchers and juggles are one-on-one: with a locked target, nobody else gets caught.
@@ -561,8 +611,10 @@ function landHits(w: World, p: Player, target: Enemy | undefined) {
   }
   if (!victims.length) return;
   const smash = p.move === 'smash';
+  // A knee straight out of a perfect evade hits much harder.
+  const bonus = p.move === 'knee' && w.frame - p.perfectAt <= T.dodge.dash.frames + T.followUp.dodge ? T.dodge.perfectKnee : 1;
   for (const e of victims) {
-    damageEnemy(w, e, smash ? T.bottle.meleeDamage : m.damage, p.pos, m.knock, m.effect as Effect, m.stun, p.index, smash || p.move === 'riposte');
+    damageEnemy(w, e, Math.round((smash ? T.bottle.meleeDamage : m.damage) * bonus), p.pos, m.knock, m.effect as Effect, m.stun, p.index, smash || p.move === 'riposte');
   }
   p.hasHit = true;
   p.hits = w.frame - p.lastHitAt <= 90 ? p.hits + victims.length : victims.length;
@@ -570,12 +622,15 @@ function landHits(w: World, p: Player, target: Enemy | undefined) {
   const st = w.stats[p.index];
   st.bestCombo = Math.max(st.bestCombo, p.hits);
   const heavy = m.effect !== 'stun';
-  w.hitstop = Math.max(w.hitstop, m.effect === 'launch' ? T.hitstop.launch : heavy ? T.hitstop.heavy : T.hitstop.light);
+  // Hitstop on the people involved only: the victim holds a little longer than the attacker.
+  const stop = m.effect === 'launch' ? T.hitstop.launch : heavy ? T.hitstop.heavy : T.hitstop.light;
+  p.stop = Math.max(p.stop, stop);
+  for (const e of victims) { e.stop = Math.max(e.stop, stop + T.hitstop.victimExtra); e.hitDir = { ...p.facing }; }
   w.shake = Math.max(w.shake, heavy ? 0.3 : 0.12);
   // String bookkeeping: jab and cross build it, anything else ends it. Timing counts from the
   // end of the hitstop.
   p.combo = p.move === 'jab' ? 1 : p.move === 'cross' ? 2 : 0;
-  p.comboAt = w.frame + w.hitstop;
+  p.comboAt = w.frame + p.stop;
   w.events.push({ type: 'hit', pos: { x: p.pos.x + p.facing.x, y: p.pos.y + p.facing.y }, heavy, by: p.index, move: p.move });
   if (smash) breakHeldBottle(w, p);
 }
@@ -604,8 +659,9 @@ function hurtPlayer(w: World, p: Player, base: number, from: Vec, heavy: boolean
   const away = norm(sub(p.pos, from));
   p.pos.x += away.x * knock; p.pos.y += away.y * knock;
   dropBottle(w, p, away);
-  w.hitstop = heavy ? T.hitstop.heavy : T.hitstop.light;
-  w.shake = heavy ? 0.35 : 0.2;
+  p.stop = Math.max(p.stop, (heavy ? T.hitstop.heavy : T.hitstop.light) + T.hitstop.victimExtra);
+  p.hitDir = { x: -away.x, y: -away.y };
+  w.shake = Math.max(w.shake, heavy ? 0.35 : 0.2);
   w.events.push({ type: 'playerHit', pos: { ...p.pos }, heavy, player: p.index });
   if (p.hp > 0) return false;
   p.hp = 0; p.revive = 0; setPlayer(p, 'down', 0);
@@ -625,6 +681,7 @@ function strike(w: World, p: Player, e: Enemy) {
   // A swing that could have been countered and wasn't.
   if (!e.unblockable) w.stats[p.index].missedCounters++;
   const source = e.kind === 'boss' ? (e.attack === 'haymaker' || e.attack === 'charge' ? 'the President\'s ' + SOURCE[e.attack] : 'the President') : SOURCE[e.attack];
+  e.stop = e.unblockable ? T.hitstop.heavy : T.hitstop.light;
   if (!hurtPlayer(w, p, a.damage, e.pos, e.unblockable, a.knock, source)) setPlayer(p, 'hitstun', a.stun);
 }
 
@@ -675,6 +732,7 @@ function stepEnemies(w: World) {
       if (near) e.focus = near.index;
     }
     const p = w.players[e.focus];
+    if (e.stop > 0) { e.stop--; continue; }
     e.t++;
     if (e.cooldown > 0) e.cooldown--;
     e.pos.x += e.vel.x; e.pos.y += e.vel.y;
@@ -731,9 +789,9 @@ function stepEnemies(w: World) {
           // Lunging attacks travel along the line he committed to; a dodge sideways beats them.
           if (a.lunge > 0 && !e.connected) { e.pos.x += e.facing.x * a.lunge / a.active; e.pos.y += e.facing.y * a.lunge / a.active; }
           const cone = a.lunge > 0 ? 0.3 : 0.5;
-          if (!e.connected && standing(p) && !playerInvulnerable(p) && d <= a.reach && dot(e.facing, toN) > cone) {
+          if (!e.connected && standing(p) && d <= a.reach && dot(e.facing, toN) > cone) {
             e.connected = true;
-            strike(w, p, e);
+            if (!playerInvulnerable(p)) strike(w, p, e);
           }
         }
         if (e.state === 'active' && e.t >= e.dur) setEnemy(e, 'recover', a.recovery);
@@ -785,7 +843,7 @@ function stepCups(w: World) {
       const e = w.enemies.find(e => targetable(e) && dist(e.pos, c.pos) < T.cup.hitRadius + 0.1);
       if (e) {
         damageEnemy(w, e, T.cup.deflectDamage, { x: c.pos.x - c.vel.x * 5, y: c.pos.y - c.vel.y * 5 }, 5, 'down', 0, c.owner, true);
-        w.hitstop = T.hitstop.bottle; w.shake = 0.25;
+        e.stop = T.hitstop.bottle; w.shake = 0.25;
         w.events.push({ type: 'hit', pos: { ...c.pos }, heavy: true, by: c.owner });
         return false;
       }
@@ -802,7 +860,7 @@ function stepBottles(w: World) {
       const hit = w.enemies.find(e => alive(e) && e.state !== 'down' && dist(e.pos, b.pos) < 0.7);
       if (hit) {
         damageEnemy(w, hit, T.bottle.damage, { x: b.pos.x - b.vel.x * 5, y: b.pos.y - b.vel.y * 5 }, 5, 'down', 0, b.holder, true);
-        w.hitstop = T.hitstop.bottle; w.shake = 0.25;
+        hit.stop = T.hitstop.bottle; w.shake = 0.25;
         w.events.push({ type: 'hit', pos: { ...b.pos }, heavy: true, by: b.holder });
       }
       if (hit || outOfBounds(b.pos)) {
@@ -833,7 +891,7 @@ function slams(w: World) {
       if (e.lastHitBy >= 0) w.stats[e.lastHitBy].slams++;
       if (e.hp <= 0) { e.hp = 0; setEnemy(e, 'dead', 0); if (e.lastHitBy >= 0) w.stats[e.lastHitBy].kos++; w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' }); }
       else e.dur += T.slam.extraDown;
-      w.hitstop = T.hitstop.heavy; w.shake = 0.4;
+      e.stop = T.hitstop.heavy; w.shake = 0.4;
       w.events.push({ type: 'slam', pos: { ...e.pos } });
       continue;
     }
@@ -848,7 +906,8 @@ function slams(w: World) {
 function separate(w: World) {
   const bodies: { pos: Vec; r: number; fixed: boolean }[] = [
     // An attacking player holds their ground: the crowd gives way instead of shoving them off target.
-    ...w.players.filter(standing).map(p => ({ pos: p.pos, r: T.player.radius, fixed: p.state === 'counter' || p.state === 'attack' })),
+    // A player mid-evade slips through the crowd.
+    ...w.players.filter(p => standing(p) && !(p.state === 'dodge' && playerInvulnerable(p))).map(p => ({ pos: p.pos, r: T.player.radius, fixed: p.state === 'counter' || p.state === 'attack' })),
     ...w.enemies.filter(e => alive(e) && e.state !== 'down' && !(e.state === 'air' && e.z > 0.5)).map(e => ({ pos: e.pos, r: T[e.kind].radius, fixed: e.kind === 'boss' })),
   ];
   for (let i = 0; i < bodies.length; i++) {
@@ -887,7 +946,7 @@ export function step(w: World, inputs: Input | Input[]): World {
     // Keep presses made during hitstop so combos stay responsive.
     for (const p of w.players) {
       const input = inputFor(p), pressed = pressedAction(input);
-      if (pressed) p.buffer = { action: pressed, frames: T.inputBuffer, mx: input.mx, my: input.my };
+      if (pressed && standing(p)) p.buffer = { action: pressed, frames: T.inputBuffer, mx: input.mx, my: input.my };
     }
     return w;
   }

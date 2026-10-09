@@ -40,10 +40,23 @@ const thugLook = (kind: EnemyKind, id: number): Look => {
     shirt: f.shirt, pants: PANTS[id % PANTS.length], skin: SKINS[(id * 3) % SKINS.length],
     hair: [0x2a1d16, 0x6b4a2a, 0xb08a50, 0x1a1a1a][(id * 5) % 4],
     print: { letters: f.letters, ink: f.ink }, scale: SCALE[kind],
+    build: kind === 'heavy' || kind === 'boss' ? 'heavy' : kind === 'kicker' || kind === 'thrower' ? 'lean' : 'regular',
   };
 };
 
 interface Fx { mesh: THREE.Object3D; life: number; max: number; vel?: THREE.Vector3; grow?: number }
+
+// What a figure looked like at the last two sim ticks, so drawing can interpolate between them
+// at any frame rate (and through slow motion). `offset` hides teleports (a counter's snap, a
+// knockback) by easing the body across instead; `vib` is the hitstop shake.
+interface Track {
+  prev: { x: number; y: number; z: number; yaw: number; pose: Pose | null };
+  cur: { x: number; y: number; z: number; yaw: number; pose: Pose | null };
+  offset: THREE.Vector2; vib: { x: number; y: number };
+}
+const angleTo = (from: number, to: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+// Smoothed 1D noise for camera shake: reproducible, and it follows slow motion.
+const noise = (t: number, seed: number) => Math.sin(t * 1.7 + seed) * 0.5 + Math.sin(t * 2.9 + seed * 2.3) * 0.3 + Math.sin(t * 5.3 + seed * 0.7) * 0.2;
 
 export class Renderer {
   renderer: THREE.WebGLRenderer;
@@ -79,6 +92,9 @@ export class Renderer {
   }
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
+  private camPrev = new THREE.Vector3();
+  private tracks = new Map<string, Track>();
+  private trauma = 0; private kick = new THREE.Vector2(); private fovPunch = 0; private ticks = 0;
   private ragdolls = new Map<string, Ragdoll>();
   private restPose = new Map<string, Pose>();
   private risingT = new Map<string, number>();
@@ -155,9 +171,47 @@ export class Renderer {
     return rest ? mix(rest, target, Math.min(1, u * u * 1.4)) : target;
   }
 
+  // Record this tick's placement for a figure, turning toward the sim's facing at a capped rate
+  // (snapping when `snap`), and place the figure there for anything that needs its matrix.
+  private track(key: string, f: Figure, pos: Vec, facing: Vec, z: number, snap: boolean, stop: number, hitDir: Vec, victim: boolean) {
+    const want = Math.atan2(facing.x, facing.y);
+    let t = this.tracks.get(key);
+    if (!t) {
+      const c = { x: pos.x, y: pos.y, z, yaw: want, pose: null };
+      t = { prev: { ...c }, cur: { ...c }, offset: new THREE.Vector2(), vib: { x: 0, y: 0 } };
+      this.tracks.set(key, t);
+    }
+    t.prev = { ...t.cur };
+    // A jump too big to be running: ease across it instead of popping (but not a stage change).
+    const jump = Math.hypot(pos.x - t.cur.x, pos.y - t.cur.y);
+    if (jump > 0.6 && jump < 5) t.offset.x += t.cur.x - pos.x, t.offset.y += t.cur.y - pos.y;
+    t.offset.multiplyScalar(0.72);
+    const d = angleTo(t.cur.yaw, want);
+    const turn = snap ? d : Math.sign(d) * Math.min(Math.abs(d), Math.max(0.15, Math.abs(d) * 0.35));
+    t.cur = { x: pos.x, y: pos.y, z, yaw: t.cur.yaw + turn, pose: t.cur.pose };
+    // Hitstop shake: the victim rattles along the line of the hit, the attacker barely.
+    const amp = stop > 0 ? (victim ? 0.07 : 0.015) * Math.min(1, stop / 6) * (this.ticks % 2 ? 1 : -1) : 0;
+    t.vib = { x: hitDir.x * amp, y: hitDir.y * amp };
+    f.root.position.set(pos.x + t.offset.x, z, pos.y + t.offset.y);
+    f.root.rotation.y = t.cur.yaw;
+    return t;
+  }
+
+  // Draw a tracked figure between its last two ticks.
+  private show(key: string, f: Figure, alpha: number) {
+    const t = this.tracks.get(key);
+    if (!t || !t.cur.pose) return;
+    const a = t.prev, b = t.cur;
+    f.root.position.set(a.x + (b.x - a.x) * alpha + t.offset.x + t.vib.x, a.z + (b.z - a.z) * alpha, a.y + (b.y - a.y) * alpha + t.offset.y + t.vib.y);
+    f.root.rotation.y = a.yaw + angleTo(a.yaw, b.yaw) * alpha;
+    const bp = b.pose!;
+    f.apply(a.pose && alpha < 1 ? mix(a.pose, bp, alpha) : bp);
+  }
+
   private posePlayer(p: Player, f: Figure, w: World) {
     const key = `p${p.index}`;
-    f.place(p.pos, p.facing);
+    const tr = this.track(key, f, p.pos, p.facing, 0, p.state === 'counter' || (p.state === 'attack' && p.t >= p.lead) || p.state === 'dodge', p.stop, p.hitDir, p.state === 'hitstun');
+    if (p.stop > 0 || w.hitstop > 0) { tr.prev.pose = tr.cur.pose; return; }
     let target = playerPose(p, w, this.motion(key, p.pos, T.player.speed));
     if (p.state === 'down') {
       target = this.ragdollPose(key, f, w, p.pos, new THREE.Vector3(-p.facing.x * 2, 2, -p.facing.y * 2));
@@ -170,15 +224,18 @@ export class Renderer {
     }
     const contact = p.state === 'attack' || p.state === 'counter';
     const travel = p.state === 'attack' && p.t < p.lead;
-    f.apply(this.blender(key).next(`${p.state}:${p.move}:${travel}`, target, (contact && !travel) || p.state === 'down'));
+    if (p.state === 'down') tr.offset.set(0, 0);
+    tr.cur.pose = this.blender(key).next(`${p.state}:${p.move}:${travel}`, target, (contact && !travel) || p.state === 'down' || p.state === 'dodge');
+    if (!tr.prev.pose) tr.prev.pose = tr.cur.pose;
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
   }
 
   private poseEnemy(e: Enemy, f: Figure, w: World) {
     const key = `e${e.id}`;
-    f.place(e.pos, e.facing);
     // Launched enemies fly at their height; a knockout in the air starts the ragdoll up there.
-    if (e.state === 'air' || (e.state === 'dead' && !this.ragdolls.has(key))) f.root.position.y = e.z;
+    const z = e.state === 'air' || (e.state === 'dead' && !this.ragdolls.has(key)) ? e.z : 0;
+    const tr = this.track(key, f, e.pos, e.facing, z, e.state === 'active' || e.state === 'stun' && e.t < 2, e.stop, e.hitDir, true);
+    if ((e.stop > 0 || w.hitstop > 0) && e.state !== 'dead') { tr.prev.pose = tr.cur.pose; return; }
     let target = enemyPose(e, w, this.motion(key, e.pos, T[e.kind].speed));
     if (e.state === 'down' || e.state === 'dead') {
       // Launch speed from the knockback the simulation gave them: harder hits fly higher.
@@ -190,7 +247,10 @@ export class Renderer {
     } else if (e.state === 'getup') {
       target = this.rising(key, target, e.t / Math.max(1, e.dur));
     } else this.restPose.delete(key);
-    f.apply(this.blender(key).next(`${e.state}:${e.attack}`, target, e.state === 'active' || e.state === 'down' || e.state === 'dead'));
+    tr.cur.pose = this.blender(key).next(`${e.state}:${e.attack}`, target, e.state === 'active' || e.state === 'down' || e.state === 'dead');
+    if (!tr.prev.pose) tr.prev.pose = tr.cur.pose;
+    // A ragdoll lives in world space: no smoothing offset under it.
+    if (e.state === 'down' || e.state === 'dead') tr.offset.set(0, 0);
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
     // Red attacks glow from the start of the wind-up so the dodge can be planned; both colours
@@ -221,7 +281,7 @@ export class Renderer {
   clear() {
     for (const v of this.enemies.values()) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); }
     this.enemies.clear();
-    this.moves.clear(); this.blenders.clear();
+    this.moves.clear(); this.blenders.clear(); this.tracks.clear();
     this.ragdolls.clear(); this.restPose.clear(); this.risingT.clear();
     for (const p of this.props) p.reset();
     for (const v of this.cups.values()) { this.scene.remove(v.mesh); v.prompt.remove(); }
@@ -246,6 +306,20 @@ export class Renderer {
   events(evts: GameEvent[]) {
     const props = this.props[this.shown];
     for (const ev of evts) {
+      // Camera: trauma by weight, a kick along the blow, a little FOV punch on the big ones.
+      const shake = (amount: number, at?: Vec, fov = 0) => {
+        this.trauma = Math.min(1, this.trauma + amount);
+        this.fovPunch += fov;
+        if (at) { const d = new THREE.Vector2(at.x - this.camTarget.x, at.y - this.camTarget.z).normalize().multiplyScalar(amount * 0.35); this.kick.add(d); }
+      };
+      if (ev.type === 'hit') shake(ev.heavy ? 0.32 : 0.14, ev.pos, ev.heavy ? 1.2 : 0);
+      if (ev.type === 'counter') shake(0.38, ev.pos, 1.5);
+      if (ev.type === 'launch') shake(0.25, ev.pos, 0.8);
+      if (ev.type === 'spike') shake(0.6, ev.pos, 3.5);
+      if (ev.type === 'slam') shake(0.5, ev.pos, 2.5);
+      if (ev.type === 'ko') shake(0.3, ev.pos, ev.boss ? 4 : 1.5);
+      if (ev.type === 'playerHit') shake(ev.heavy ? 0.45 : 0.25, ev.pos);
+      if (ev.type === 'enrage') shake(0.5);
       // Impacts scatter nearby props.
       if (ev.type === 'slam') props?.blast(ev.pos, 1.8, 5);
       if (ev.type === 'ko') props?.blast(ev.pos, 1.4, 3.5);
@@ -258,13 +332,66 @@ export class Renderer {
       if (ev.type === 'tag') this.popup(ev.pos, 'TAG TEAM!');
       if (ev.type === 'slam') { this.burst(ev.pos, 0xffffff, 0.5, 12); this.popup(ev.pos, 'SLAM!'); }
       if (ev.type === 'launch') this.burst(ev.pos, 0xffd23f, 0.3, 10);
+      if (ev.type === 'perfect') { this.burst(ev.pos, 0x7fd8ff, 0.5, 14); this.popup(ev.pos, 'PERFECT'); }
       if (ev.type === 'spike') { props?.blast(ev.pos, 2.0, 4); this.burst({ ...ev.pos }, 0xffffff, 0.6, 14); this.popup(ev.pos, 'SPIKE!'); }
       if (ev.type === 'deflect') { this.burst(ev.pos, 0xffd23f, 0.3, 8); this.popup(ev.pos, 'RETURN TO SENDER'); }
     }
   }
 
-  draw(w: World) {
+  private playerView(i: number) {
+    let v = this.players[i];
+    if (!v) {
+      const fig = new Figure(CAST[i].look, CLIPS.guard.frames[0]);
+      this.scene.add(fig.root);
+      const tag = document.createElement('div'); tag.className = 'nametag';
+      tag.style.setProperty('--c', CAST[i].css);
+      this.overlay.append(tag);
+      v = this.players[i] = { fig, tag };
+    }
+    return v;
+  }
+
+  private enemyView(e: Enemy) {
+    let v = this.enemies.get(e.id);
+    if (!v) {
+      const fig = new Figure(thugLook(e.kind, e.id), CLIPS.guard.frames[0]);
+      this.scene.add(fig.root);
+      const prompt = document.createElement('div'); prompt.className = 'prompt';
+      const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
+      this.overlay.append(prompt, bar);
+      v = { fig, prompt, bar };
+      this.enemies.set(e.id, v);
+    }
+    return v;
+  }
+
+  // Once per simulation tick (so it keeps time with the fight at any frame rate, and slows with
+  // it): poses, ragdolls, props, effects, camera target and shake.
+  update(w: World) {
+    this.ticks++;
     this.props[w.stage]?.step(LEVELS[w.stage].obstacles);
+    w.players.forEach((p, i) => this.posePlayer(p, this.playerView(i).fig, w));
+    for (const e of w.enemies) this.poseEnemy(e, this.enemyView(e).fig, w);
+    for (let i = this.fx.length - 1; i >= 0; i--) {
+      const f = this.fx[i];
+      f.life--;
+      const k = f.life / f.max;
+      if (f.grow) f.mesh.scale.setScalar(1 + (1 - k) * f.grow);
+      if (f.vel) { f.mesh.position.add(f.vel); f.vel.y -= 0.006; }
+      ((f.mesh as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = k;
+      if (f.life <= 0) { this.scene.remove(f.mesh); this.fx.splice(i, 1); }
+    }
+    // Camera follows the standing players (and leans toward the man they're fighting).
+    const up = w.players.filter(p => p.state !== 'down');
+    const focus = (up.length ? up : w.players).reduce((a, p, _, all) => ({ x: a.x + p.pos.x / all.length, y: a.y + p.pos.y / all.length }), { x: 0, y: 0 });
+    this.camPrev.copy(this.camTarget);
+    this.camTarget.lerp(new THREE.Vector3(focus.x * 0.62, 0, focus.y * 0.45), 0.09);
+    this.trauma = Math.max(0, this.trauma - 0.025);
+    this.kick.multiplyScalar(0.78);
+    this.fovPunch *= 0.86;
+  }
+
+  draw(w: World, alpha = 1) {
     if (w.stage !== this.shown) {
       this.shown = w.stage;
       this.stages.forEach((g, i) => { g.visible = i === w.stage; });
@@ -273,17 +400,10 @@ export class Renderer {
       this.scene.fog = new THREE.Fog(sky, 26, 48);
     }
     w.players.forEach((p, i) => {
-      let v = this.players[i];
-      if (!v) {
-        const fig = new Figure(CAST[i].look, CLIPS.guard.frames[0]);
-        this.scene.add(fig.root);
-        const tag = document.createElement('div'); tag.className = 'nametag';
-        tag.style.setProperty('--c', CAST[i].css);
-        this.overlay.append(tag);
-        v = this.players[i] = { fig, tag };
-      }
-      if (w.hitstop === 0) this.posePlayer(p, v.fig, w);
-      const { sx, sy } = this.screen(p.pos.x, p.state === 'down' ? 0.9 : 2.25 * CAST[i].look.scale, p.pos.y);
+      const v = this.playerView(i);
+      this.show(`p${p.index}`, v.fig, alpha);
+      const at = v.fig.root.position;
+      const { sx, sy } = this.screen(at.x, p.state === 'down' ? 0.9 : 2.25 * CAST[i].look.scale, at.z);
       v.tag.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -100%)`;
       const reviving = p.state === 'down' && p.revive > 0;
       v.tag.textContent = p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
@@ -295,19 +415,10 @@ export class Renderer {
     const seen = new Set<number>();
     for (const e of w.enemies) {
       seen.add(e.id);
-      let v = this.enemies.get(e.id);
-      if (!v) {
-        const fig = new Figure(thugLook(e.kind, e.id), CLIPS.guard.frames[0]);
-        this.scene.add(fig.root);
-        const prompt = document.createElement('div'); prompt.className = 'prompt';
-        const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
-        this.overlay.append(prompt, bar);
-        v = { fig, prompt, bar };
-        this.enemies.set(e.id, v);
-      }
-      if (w.hitstop === 0 || e.state === 'dead') this.poseEnemy(e, v.fig, w);
-
-      const head = new THREE.Vector3(e.pos.x, 2.2 * SCALE[e.kind] + 0.1, e.pos.y).project(this.camera);
+      const v = this.enemyView(e);
+      this.show(`e${e.id}`, v.fig, alpha);
+      const at = v.fig.root.position;
+      const head = new THREE.Vector3(at.x, 2.2 * SCALE[e.kind] + 0.1 + at.y, at.z).project(this.camera);
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
       const strike = framesToStrike(e);
       const canCounter = w.players.some(p => counterable(p, e, counterWindow(w)));
@@ -320,7 +431,7 @@ export class Renderer {
       (v.bar.firstChild as HTMLElement).style.width = `${(e.hp / e.maxHp) * 100}%`;
     }
     for (const [id, v] of this.enemies) {
-      if (!seen.has(id)) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); this.enemies.delete(id); }
+      if (!seen.has(id)) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); this.enemies.delete(id); this.tracks.delete(`e${id}`); }
     }
 
     // Red cups in flight, with a counter prompt when someone can knock one back.
@@ -386,26 +497,20 @@ export class Renderer {
       }
     }
 
-    for (let i = this.fx.length - 1; i >= 0; i--) {
-      const f = this.fx[i];
-      f.life--;
-      const k = f.life / f.max;
-      if (f.grow) f.mesh.scale.setScalar(1 + (1 - k) * f.grow);
-      if (f.vel) { f.mesh.position.add(f.vel); f.vel.y -= 0.006; }
-      ((f.mesh as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = k;
-      if (f.life <= 0) { this.scene.remove(f.mesh); this.fx.splice(i, 1); }
-    }
-
-    const up = w.players.filter(p => p.state !== 'down');
-    const focus = (up.length ? up : w.players).reduce((a, p, _, all) => ({ x: a.x + p.pos.x / all.length, y: a.y + p.pos.y / all.length }), { x: 0, y: 0 });
     // A finishing blow pulls the camera in on the knockout, then eases back out.
     const now = performance.now();
     const pk = this.punchUntil > now ? Math.sin(Math.min(1, (this.punchUntil - now) / this.punchMs) * Math.PI) : 0;
-    const aim = pk > 0 ? { x: focus.x + (this.punchAt.x - focus.x) * pk, y: focus.y + (this.punchAt.y - focus.y) * pk } : focus;
-    this.camTarget.lerp(new THREE.Vector3(aim.x * (0.55 + 0.45 * pk), 0, aim.y * (0.35 + 0.65 * pk)), pk > 0 ? 0.15 : 0.08);
-    const s = w.shake, zoom = 1 - 0.45 * pk;
-    this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 1.6 + 8.9 * zoom + (Math.random() - 0.5) * s, this.camTarget.z + 12.5 * zoom);
-    this.camera.lookAt(this.camTarget.x, 1.6 - 0.6 * pk, this.camTarget.z - 2.2 * zoom);
+    const base = this.camPrev.clone().lerp(this.camTarget, alpha);
+    const aim = pk > 0 ? base.lerp(new THREE.Vector3(this.punchAt.x, 0, this.punchAt.y), pk * 0.7) : base;
+    // Trauma shake (squared, smoothed noise on the tick clock) plus a kick away from the hit.
+    const shake = this.trauma * this.trauma, tt = this.ticks + alpha;
+    const sx = noise(tt * 0.45, 1.3) * 0.32 * shake + this.kick.x, sy = noise(tt * 0.45, 7.1) * 0.22 * shake, sz = noise(tt * 0.45, 4.2) * 0.25 * shake + this.kick.y;
+    const zoom = 0.88 - 0.4 * pk;
+    this.camera.position.set(aim.x + sx, 1.6 + 8.9 * zoom + sy, aim.z + 12.5 * zoom + sz);
+    this.camera.lookAt(aim.x + sx * 0.5, 1.6 - 0.6 * pk, aim.z - 2.2 * zoom + sz * 0.5);
+    this.camera.rotateZ(noise(tt * 0.5, 2.9) * 0.012 * shake);
+    const fov = 38 - this.fovPunch;
+    if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
     this.renderer.render(this.scene, this.camera);
   }
 }

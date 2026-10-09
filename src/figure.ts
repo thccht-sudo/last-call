@@ -1,15 +1,18 @@
-// A jointed mannequin hung between the 18 points of a Pose: capsules for limbs with real elbows
-// and knees, an oriented torso that carries shirt prints, and a head that carries hair, beard
-// and glasses.
+// A fighter: one skinned, toon-shaded body (modelled in Blender by tools/build-characters.py)
+// whose 13 bones are aimed every frame along the 18 joint positions of a Pose, an ink outline,
+// a torso frame that carries shirt prints and collars, and a head with hair, beard and glasses.
 import * as THREE from 'three';
 import { J, Pose, get } from './anim/pose';
+import bodies from './anim/bodies.json';
 
 export interface Look {
   shirt: number; pants: number; skin: number; scale: number;
   jacket?: number; hair?: number; messy?: boolean; beard?: number; glasses?: boolean; collar?: number;
   longSleeves?: boolean;
   print?: { letters: string; ink: string }; // Greek letters across the chest and back
+  build?: Build;
 }
+export type Build = 'regular' | 'heavy' | 'lean';
 
 const printTex = new Map<string, THREE.CanvasTexture>();
 function letterTexture(letters: string, ink: string) {
@@ -26,74 +29,181 @@ function letterTexture(letters: string, ink: string) {
   return printTex.get(key)!;
 }
 
-const UP = new THREE.Vector3(0, 1, 0);
 const v = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z);
 
 // Mocap actors stand about 1.65 m; this brings a scale-1 character to about 1.78 m (5'10").
 const BASE_SCALE = 1.08;
+const HEAD_SCALE = 1.18; // stylised: a slightly big head reads better from the overhead camera
+
+type Part = { position: number[]; normal: number[]; index: number[]; skinIndex: number[]; skinWeight: number[] };
+type Bodies = { joints: number[][]; bones: { name: string; from: number; to: number; side: number[] | null }[]; builds: Record<Build, Record<string, Part>> };
+const BODIES = bodies as unknown as Bodies;
+const BONES = BODIES.bones;
+// Bones with no fixed sideways reference twist with the bend of their limb: joints a, b, c.
+const LIMB: Record<string, [number, number, number, number, number]> = {
+  upperArmL: [J.ShL, J.ElL, J.HandL, J.ShL, J.ShR], foreArmL: [J.ShL, J.ElL, J.HandL, J.ShL, J.ShR],
+  upperArmR: [J.ShR, J.ElR, J.HandR, J.ShL, J.ShR], foreArmR: [J.ShR, J.ElR, J.HandR, J.ShL, J.ShR],
+  thighL: [J.HipL, J.KneeL, J.FootL, J.HipL, J.HipR], shinL: [J.HipL, J.KneeL, J.FootL, J.HipL, J.HipR],
+  thighR: [J.HipR, J.KneeR, J.FootR, J.HipL, J.HipR], shinR: [J.HipR, J.KneeR, J.FootR, J.HipL, J.HipR],
+};
+// Material slot for each modelled part.
+const SLOT: Record<string, number> = { shirt: 0, sleeveL: 1, sleeveR: 1, handL: 2, handR: 2, neck: 2, pants: 3, legL: 3, legR: 3, shoeL: 4, shoeR: 4 };
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
+const _x = new THREE.Vector3(), _y = new THREE.Vector3(), _z = new THREE.Vector3(), _s = new THREE.Vector3(), _n = new THREE.Vector3();
+const jp = (p: ArrayLike<number>, j: number, out: THREE.Vector3) => out.set(p[j * 3], p[j * 3 + 1], p[j * 3 + 2]);
+
+// A bone's frame from joint positions: y along the bone, x sideways (from a body line, or for
+// limbs from the bend of the elbow or knee, blended toward the body line as the limb straightens
+// so it never flips), z = x × y. y is scaled by `stretch` so the mesh always meets the joints.
+function boneMatrix(p: ArrayLike<number>, i: number, out: THREE.Matrix4, restLen?: number[]) {
+  const b = BONES[i];
+  jp(p, b.from, _a); jp(p, b.to, _b);
+  _y.subVectors(_b, _a);
+  const length = _y.length();
+  _y.divideScalar(length || 1);
+  const limb = LIMB[b.name];
+  if (b.side) { jp(p, b.side[0], _s); jp(p, b.side[1], _c); _s.sub(_c); }
+  else {
+    jp(p, limb[3], _s); jp(p, limb[4], _c); _s.sub(_c).normalize();
+    jp(p, limb[0], _a); jp(p, limb[1], _b); jp(p, limb[2], _c);
+    _n.crossVectors(_b.clone().sub(_a), _c.clone().sub(_b));
+    const bend = Math.min(1, _n.length() / (_a.distanceTo(_b) * _b.distanceTo(_c) + 1e-6) / 0.35);
+    _n.normalize(); if (_n.dot(_s) < 0) _n.negate();
+    _s.lerp(_n, bend);
+    jp(p, b.from, _a);
+  }
+  _x.copy(_s).addScaledVector(_y, -_s.dot(_y)).normalize();
+  _z.crossVectors(_x, _y);
+  const k = restLen ? length / restLen[i] : 1;
+  out.makeBasis(_x, _y.multiplyScalar(k), _z).setPosition(_a);
+  return length;
+}
+
+const REST = Float32Array.from(BODIES.joints.flat());
+const REST_LEN: number[] = [];
+const REST_INV = BONES.map((_, i) => { const m = new THREE.Matrix4(); REST_LEN[i] = boneMatrix(REST, i, m); return m.invert(); });
+
+const geometries = new Map<Build, THREE.BufferGeometry>();
+function bodyGeometry(build: Build) {
+  let g = geometries.get(build);
+  if (g) return g;
+  const parts = Object.entries(BODIES.builds[build]).sort((a, b) => SLOT[a[0]] - SLOT[b[0]]);
+  const pos: number[] = [], nrm: number[] = [], si: number[] = [], sw: number[] = [], idx: number[] = [];
+  g = new THREE.BufferGeometry();
+  let slot = -1, groupStart = 0;
+  for (const [name, part] of parts) {
+    if (SLOT[name] !== slot) {
+      if (slot >= 0) g.addGroup(groupStart, idx.length - groupStart, slot);
+      slot = SLOT[name]; groupStart = idx.length;
+    }
+    const base = pos.length / 3;
+    pos.push(...part.position); nrm.push(...part.normal); si.push(...part.skinIndex); sw.push(...part.skinWeight);
+    for (const i of part.index) idx.push(base + i);
+  }
+  g.addGroup(groupStart, idx.length - groupStart, slot);
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+  g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  g.setIndex(idx);
+  g.normalizeNormals();
+  geometries.set(build, g);
+  return g;
+}
+
+// Three-band toon ramp.
+const RAMP = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([125, 125, 125, 255, 195, 195, 195, 255, 255, 255, 255, 255]), 3, 1);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return t;
+})();
+// Toon shading plus a soft rim light, so fighters stand out from a dark street.
+const RIM = { value: new THREE.Color(0x8fa8ff) };
+export function setRim(color: number) { RIM.value.setHex(color); }
+const toon = (color: number) => {
+  const m = new THREE.MeshToonMaterial({ color, gradientMap: RAMP });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.rimColor = RIM;
+    sh.fragmentShader = 'uniform vec3 rimColor;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
+      float rim = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
+      outgoingLight += rimColor * smoothstep(0.55, 0.95, rim) * 0.4;
+      #include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey = () => 'toon-rim';
+  return m;
+};
+
+// Ink outline: the body again, back faces only, pushed out along its normals after skinning.
+function outlineMaterial(width: number) {
+  const m = new THREE.MeshBasicMaterial({ color: 0x0a0a0c, side: THREE.BackSide });
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <skinning_vertex>', `#include <skinning_vertex>
+      transformed += normalize(objectNormal) * ${width.toFixed(4)};`);
+  };
+  return m;
+}
 
 export class Figure {
   root = new THREE.Group();
   private torso = new THREE.Group();
   private head = new THREE.Group();
-  private segs: { mesh: THREE.Mesh; a: number; b: number }[] = [];
-  private joints: { mesh: THREE.Mesh; j: number }[] = [];
-  private cloth: THREE.MeshStandardMaterial;
-  private torsoLen: number;
+  private bones: THREE.Bone[] = [];
+  private mats: THREE.MeshToonMaterial[] = [];
+  private ink: THREE.MeshBasicMaterial;
+  private inkHead = new THREE.MeshBasicMaterial({ color: 0x0a0a0c, side: THREE.BackSide });
+  private m = new THREE.Matrix4();
+  private chestDepth: number;
 
   constructor(look: Look, bind: Pose) {
-    const mat = (color: number, rough = 0.75) => new THREE.MeshStandardMaterial({ color, roughness: rough });
-    this.cloth = mat(look.jacket ?? look.shirt, 0.7);
-    const skin = mat(look.skin, 0.8), pants = mat(look.pants, 0.9), shoes = mat(0x1a1a1c, 0.6);
-    const sleeve = look.jacket !== undefined || look.longSleeves ? this.cloth : skin;
-    const len = (a: number, b: number) => get(bind, a) && v(get(bind, a)).distanceTo(v(get(bind, b)));
-    const seg = (a: number, b: number, r: number, m: THREE.Material) => {
-      const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.01, len(a, b) - r * 0.5), 4, 10), m);
-      mesh.castShadow = true;
-      this.root.add(mesh);
-      this.segs.push({ mesh, a, b });
-    };
-    const ball = (j: number, r: number, m: THREE.Material) => {
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), m);
-      mesh.castShadow = true;
-      this.root.add(mesh);
-      this.joints.push({ mesh, j });
-    };
+    const mat = (color: number, _rough = 0.75) => toon(color);
+    const build = look.build ?? 'regular';
+    const cloth = look.jacket ?? look.shirt;
+    const sleeve = look.jacket !== undefined || look.longSleeves ? cloth : look.skin;
+    this.mats = [toon(cloth), toon(sleeve), toon(look.skin), toon(look.pants), toon(0x1a1a1c)];
 
-    // Limbs.
-    seg(J.ShL, J.ElL, 0.062, this.cloth); seg(J.ElL, J.HandL, 0.05, sleeve);
-    seg(J.ShR, J.ElR, 0.062, this.cloth); seg(J.ElR, J.HandR, 0.05, sleeve);
-    ball(J.HandL, 0.058, skin); ball(J.HandR, 0.058, skin);
-    seg(J.HipL, J.KneeL, 0.085, pants); seg(J.KneeL, J.FootL, 0.068, pants);
-    seg(J.HipR, J.KneeR, 0.085, pants); seg(J.KneeR, J.FootR, 0.068, pants);
-    seg(J.FootL, J.ToeL, 0.055, shoes); seg(J.FootR, J.ToeR, 0.055, shoes);
-    seg(J.HipL, J.HipR, 0.11, pants);
-    seg(J.Neck, J.Head, 0.05, skin);
+    // Skeleton: one bone per body segment, posed directly in character space.
+    const inverses: THREE.Matrix4[] = [];
+    BONES.forEach((b, i) => {
+      const bone = new THREE.Bone();
+      bone.name = b.name; bone.matrixAutoUpdate = false;
+      bone.matrix.copy(REST_INV[i]).invert();
+      this.root.add(bone); this.bones.push(bone);
+      inverses.push(REST_INV[i].clone());
+    });
+    const skeleton = new THREE.Skeleton(this.bones, inverses);
+    const geo = bodyGeometry(build);
+    const body = new THREE.SkinnedMesh(geo, this.mats);
+    body.castShadow = true; body.frustumCulled = false;
+    body.bind(skeleton, new THREE.Matrix4());
+    this.ink = outlineMaterial(build === 'heavy' ? 0.026 : 0.022);
+    const outline = new THREE.SkinnedMesh(geo, this.ink);
+    outline.frustumCulled = false;
+    outline.bind(skeleton, new THREE.Matrix4());
+    this.root.add(body, outline);
+    this.chestDepth = build === 'heavy' ? 0.17 : build === 'lean' ? 0.125 : 0.14;
 
-    // Torso: a flattened capsule from hips to neck that turns with the shoulder line.
-    this.torsoLen = len(J.Hips, J.Neck);
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, this.torsoLen - 0.12, 4, 12), this.cloth);
-    body.position.y = this.torsoLen / 2; body.scale.set(1.35, 1, 0.85); body.castShadow = true;
-    const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, len(J.ShL, J.ShR) - 0.05, 4, 8), this.cloth);
-    shoulders.rotation.z = Math.PI / 2; shoulders.position.y = this.torsoLen - 0.06; shoulders.castShadow = true;
-    this.torso.add(body, shoulders);
+    // Torso frame for what's printed or sewn on the shirt.
+    this.torsoLen = v(get(bind, J.Neck)).distanceTo(v(get(bind, J.Hips)));
     if (look.jacket !== undefined) {
-      const shirt = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.3, 0.02), mat(look.shirt, 0.6));
-      shirt.position.set(0, this.torsoLen - 0.17, 0.128); shirt.rotation.x = -0.08;
+      // The open jacket: a shirt-coloured V down the chest.
+      const shirt = new THREE.Mesh(new THREE.CircleGeometry(0.1, 3), toon(look.shirt));
+      shirt.rotation.z = -Math.PI / 2; shirt.scale.set(1.6, 0.8, 1);
+      shirt.position.set(0, this.torsoLen - 0.12, this.chestDepth + 0.006);
       this.torso.add(shirt);
     }
     if (look.collar !== undefined) {
       for (const sx of [-1, 1]) {
-        const c = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.08), mat(look.collar, 0.8));
-        c.position.set(sx * 0.055, this.torsoLen - 0.01, 0.09); c.rotation.set(0.5, sx * 0.5, sx * 0.35);
+        const c = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.08), toon(look.collar));
+        c.position.set(sx * 0.055, this.torsoLen - 0.0, this.chestDepth - 0.03); c.rotation.set(0.5, sx * 0.5, sx * 0.35);
         this.torso.add(c);
       }
     }
     if (look.print) {
-      const m = new THREE.MeshStandardMaterial({ map: letterTexture(look.print.letters, look.print.ink), transparent: true, roughness: 0.8 });
+      const m = new THREE.MeshBasicMaterial({ map: letterTexture(look.print.letters, look.print.ink), transparent: true, depthWrite: false });
       for (const side of [1, -1]) {
-        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.2), m);
-        decal.position.set(0, this.torsoLen * 0.62, side * 0.13);
+        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.21), m);
+        decal.position.set(0, this.torsoLen * 0.6, side * (this.chestDepth + 0.012));
         if (side < 0) decal.rotation.y = Math.PI;
         this.torso.add(decal);
       }
@@ -101,7 +211,12 @@ export class Figure {
     this.root.add(this.torso);
 
     // Head, with its centre a little above the head joint.
+    const skin = this.mats[2];
     const skull = new THREE.Mesh(new THREE.SphereGeometry(0.115, 16, 12), skin);
+    skull.scale.set(1, 1.08, 1.04);
+    const skullInk = new THREE.Mesh(skull.geometry, this.inkHead);
+    skullInk.scale.copy(skull.scale).multiplyScalar(1.1); skullInk.position.y = 0.09;
+    this.head.add(skullInk);
     skull.position.y = 0.09; skull.castShadow = true;
     this.head.add(skull);
     if (look.hair !== undefined) {
@@ -131,15 +246,18 @@ export class Figure {
     nose.position.set(0, 0.078, 0.116); nose.scale.set(0.9, 1.2, 1);
     this.head.add(nose);
     if (look.beard !== undefined) {
-      // A shell hugging the jaw and cheeks, plus a moustache; fuller for a full beard.
-      const beardMat = new THREE.MeshStandardMaterial({ color: look.beard, roughness: 1, side: THREE.DoubleSide });
+      // A rounded mass over the jaw and chin, under the cheeks, plus a moustache; fuller for a
+      // full beard.
+      const beardMat = toon(look.beard);
       const full = !look.messy;
-      const shell = new THREE.Mesh(new THREE.SphereGeometry(full ? 0.124 : 0.12, 18, 10, Math.PI / 2 - 1.25, 2.5, Math.PI * (full ? 0.57 : 0.61), Math.PI * (full ? 0.37 : 0.33)), beardMat);
-      shell.position.y = 0.09;
-      if (full) shell.scale.set(1.04, 1.12, 1.06);
-      const stache = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.045, 4, 8), beardMat);
-      stache.rotation.z = Math.PI / 2; stache.position.set(0, 0.058, 0.112);
-      this.head.add(shell, stache);
+      const jaw = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), beardMat);
+      jaw.position.set(0, full ? 0.035 : 0.045, full ? 0.03 : 0.025);
+      jaw.scale.set(full ? 1.12 : 1.05, full ? 0.82 : 0.66, full ? 1.0 : 0.95);
+      const stache = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.05, 4, 8), beardMat);
+      stache.rotation.z = Math.PI / 2; stache.position.set(0, 0.062, 0.113);
+      const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.008, 0.01), toon(0x3a1f18));
+      mouth.position.set(0, 0.045, 0.118);
+      this.head.add(jaw, stache, mouth);
     }
     if (look.glasses) {
       const frame = mat(0x151515, 0.4);
@@ -152,10 +270,12 @@ export class Figure {
       bridge.position.set(0, 0.104, 0.121);
       this.head.add(bridge);
     }
+    this.head.scale.setScalar(HEAD_SCALE);
     this.root.add(this.head);
     this.root.scale.setScalar(look.scale * BASE_SCALE);
     this.apply(bind);
   }
+  private torsoLen: number;
 
   place(pos: { x: number; y: number }, facing: { x: number; y: number }) {
     this.root.position.set(pos.x, 0, pos.y);
@@ -163,16 +283,11 @@ export class Figure {
   }
 
   apply(p: Pose) {
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3();
-    for (const s of this.segs) {
-      a.copy(v(get(p, s.a))); b.copy(v(get(p, s.b)));
-      d.subVectors(b, a);
-      const l = d.length();
-      s.mesh.position.addVectors(a, b).multiplyScalar(0.5);
-      if (l > 1e-5) s.mesh.quaternion.setFromUnitVectors(UP, d.divideScalar(l));
+    for (let i = 0; i < this.bones.length; i++) {
+      boneMatrix(p, i, this.m, REST_LEN);
+      this.bones[i].matrix.copy(this.m);
+      this.bones[i].matrixWorldNeedsUpdate = true;
     }
-    for (const j of this.joints) j.mesh.position.copy(v(get(p, j.j)));
-
     // Torso and head frames: up along the spine / neck, across along the shoulders.
     const hips = v(get(p, J.Hips)), neck = v(get(p, J.Neck)), head = v(get(p, J.Head));
     const across = v(get(p, J.ShL)).sub(v(get(p, J.ShR)));
@@ -189,8 +304,10 @@ export class Figure {
     this.head.quaternion.setFromRotationMatrix(frame(head.clone().sub(neck)));
   }
 
+  // Telegraphs and hit flashes: the body lights up and the ink outline takes the colour.
   glow(color: number, intensity: number) {
-    this.cloth.emissive.setHex(color);
-    this.cloth.emissiveIntensity = intensity;
+    for (const m of this.mats) { m.emissive.setHex(color); m.emissiveIntensity = intensity * 0.8; }
+    this.ink.color.setHex(intensity > 0.05 ? color : 0x0a0a0c);
+    this.inkHead.color.copy(this.ink.color);
   }
 }

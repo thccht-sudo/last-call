@@ -40,12 +40,25 @@ export const TUNING = {
   lockReach: 2.1, // the locked target is hit from this far, wherever he's drifted
   whiffRecovery: 6, // a missed attack can chain again this soon after its active frames
 
-  dodge: { frames: 18, invulnFrom: 1, invulnTo: 13, distance: 3.6 },
+  // Evades keep you facing the nearest threat: a sidestep, a backstep, or a dash (toward him, or
+  // anywhere when nobody is close). Ease-out travel: most of the distance in the first half.
+  // A perfect evade (his hit would have landed during your invulnerable frames) slows time
+  // and powers up the flying knee.
+  dodge: {
+    side: { frames: 16, invulnFrom: 1, invulnTo: 12, distance: 2.5 },
+    back: { frames: 15, invulnFrom: 1, invulnTo: 11, distance: 2.1 },
+    dash: { frames: 16, invulnFrom: 1, invulnTo: 12, distance: 3.2 },
+    threatRange: 6,
+    perfectWindow: 6, // dodging this few frames before a swing aimed at you lands is a perfect evade
+    perfectKnee: 1.6, // damage multiplier on a knee straight after a perfect evade
+  },
 
   // A counter staggers every counterable attacker in range. Attack straight after for a riposte.
   counter: { window: 24, frames: 22, cancel: 8, damage: 18, range: 2.8, whiffFrames: 14, stagger: 44 },
 
-  hitstop: { light: 5, heavy: 9, counter: 10, bottle: 8, launch: 7, spike: 12 },
+  // Hitstop freezes the attacker and the victim (the victim a little longer); counters and spikes
+  // freeze the whole fight.
+  hitstop: { light: 5, heavy: 9, counter: 10, bottle: 8, launch: 7, spike: 12, victimExtra: 2 },
 
   // Juggles: launched enemies fly on a 2D-plus-height arc; each air hit pops them up less.
   air: { gravity: 0.011, launch: 0.2, pop: 0.13, popDecay: 0.75, landDown: 46, maxHits: 3 },

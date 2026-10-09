@@ -136,6 +136,32 @@ function rising(time: number, wind: number, k: number, left: boolean): Pose {
   return pose;
 }
 
+// An evade step in local direction (dx left, dz forward). u runs 0..1 over the dodge.
+function evade(time: number, u: number, dx: number, dz: number): Pose {
+  const pose = guard(time);
+  const load = u < 0.12 ? u / 0.12 : Math.max(0, 1 - (u - 0.12) / 0.25); // knees bend, then drive
+  const air = Math.sin(clamp01((u - 0.08) / 0.62) * Math.PI); // feet skim off the floor
+  const land = clamp01((u - 0.7) / 0.3);
+  crouch(pose, 0.1 * load + 0.07 * land * (1 - land) * 4);
+  translate(pose, ALL, { y: 0.06 * air });
+  // The lead foot reaches along the step, the trail foot pushes off and follows.
+  const leadLeft = dx > 0.3 || (Math.abs(dx) <= 0.3 && dz >= 0);
+  const reachOut = Math.sin(clamp01(u / 0.7) * Math.PI * 0.5);
+  const base = (left: boolean) => ({ x: left ? 0.14 : -0.14, z: left ? 0.06 : -0.06 });
+  for (const left of [true, false]) {
+    const b = base(left), lead = left === leadLeft;
+    const k = lead ? 0.34 * reachOut * (1 - land * 0.5) : -0.22 * (1 - reachOut);
+    placeFoot(pose, left, { x: b.x + dx * k, y: 0.04 + (lead ? 0.16 : 0.1) * air, z: b.z + dz * k });
+  }
+  // Lean into the direction of travel, shoulders leading.
+  const leanAmt = 0.45 * Math.sin(clamp01(u / 0.8) * Math.PI);
+  lean(pose, leanAmt * dz);
+  rotate(pose, UPPER, get(pose, J.Hips), 'z', -leanAmt * dx);
+  rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.25 * dx * leanAmt);
+  reach(pose, true, { x: 0.22 + 0.1 * dx * air, y: 1.32, z: 0.22 }); reach(pose, false, { x: -0.22 + 0.1 * dx * air, y: 1.32, z: 0.22 });
+  return pose;
+}
+
 // Sprinting into range at the start of a long lunge.
 function dash(time: number, t: number): Pose {
   const pose = sample(CLIPS.dash, t * 1.6, true);
@@ -167,8 +193,9 @@ export function playerPose(p: Player, w: World, m: Motion): Pose {
         case 'spike': return strike('swing', t, s.startup, s.active, s.recovery, time, Math.max(0, KEYS.swing - 16));
         case 'juggle': {
           // Alternate hands, punching up at a man in the air.
-          const pose = strike(p.hits % 2 ? 'cross' : 'jab', t, s.startup, s.active, s.recovery, time);
-          const left = p.hits % 2 === 0;
+          const n = p.hasHit ? p.hits - 1 : p.hits; // the hand stays the same through the hit
+          const pose = strike(n % 2 ? 'cross' : 'jab', t, s.startup, s.active, s.recovery, time);
+          const left = n % 2 === 0;
           if (rec < 1) reach(pose, left, { x: left ? 0.15 : -0.15, y: 1.45 + 0.4 * k * (1 - rec), z: 0.3 + 0.3 * k * (1 - rec) });
           lean(pose, -0.15 * k * (1 - rec));
           return pose;
@@ -195,17 +222,9 @@ export function playerPose(p: Player, w: World, m: Motion): Pose {
       return pose;
     }
     case 'dodge': {
-      // Tuck into a ball and roll one full turn forward, coming up in guard.
-      const u = clamp01(p.t / p.dur);
-      const tuck = Math.sin(u * Math.PI);
-      const pose = guard(time);
-      placeFoot(pose, true, { x: 0.14, y: 0.35 * tuck, z: 0.3 * tuck });
-      placeFoot(pose, false, { x: -0.14, y: 0.3 * tuck, z: 0.2 * tuck });
-      reach(pose, true, { x: 0.16, y: 0.9 - 0.3 * tuck, z: 0.35 }); reach(pose, false, { x: -0.16, y: 0.9 - 0.3 * tuck, z: 0.35 });
-      lean(pose, 1.1 * tuck);
-      translate(pose, ALL, { y: -0.45 * tuck });
-      rotate(pose, ALL, { x: 0, y: 0.45, z: 0 }, 'x', easeInOut(u) * Math.PI * 2);
-      return pose;
+      // Evade relative to facing: load, drive off the far foot, lean into the step, land.
+      const side = { x: p.facing.y, y: -p.facing.x }; // the character's left, in the sim plane
+      return evade(time, clamp01(p.t / p.dur), p.dodgeDir.x * side.x + p.dodgeDir.y * side.y, p.dodgeDir.x * p.facing.x + p.dodgeDir.y * p.facing.y);
     }
     case 'hitstun': return reel(time, p.t, p.dur);
     case 'down': return downed(time, 1);

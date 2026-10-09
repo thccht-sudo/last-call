@@ -106,6 +106,7 @@ export const sfx = {
   hurt() { punch(false); noise(0.12, 900, 0.4); thump(60, 0.18, 0.7); },
   whiff() { noise(0.12, 600, 0.25); },
   warn() { sting([660, 990], 0.07); },
+  perfect() { sting([1320, 1760, 2640], 0.05); noise(0.25, 5000, 0.15); },
   launch() { punch(true); noise(0.22, 1800, 0.3); thump(120, 0.25, 0.6); },
   spike() { punch(true); noise(0.3, 1400, 0.45); thump(50, 0.4, 1); },
   dodge() { noise(0.08, 1200, 0.15); },
