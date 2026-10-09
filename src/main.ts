@@ -3,7 +3,7 @@ import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT } from './sim/
 import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
-import { sfx, unlockAudio } from './audio';
+import { sfx, unlockAudio, voice, VOICE, ambient } from './audio';
 import { playMusic, toggleMute } from './music';
 import { Host, Guest, roomFromUrl, joinLink, interpolated } from './net';
 
@@ -62,7 +62,21 @@ function react(events: GameEvent[], w: World) {
     if (guest) { if (player === localIndex) controls.rumble(0, s, wk, ms); }
     else controls.rumble(player, s, wk, ms);
   };
+  const bottled = events.some(e => e.type === 'shatter') && events.some(e => e.type === 'hit');
+  if (bottled) voice(VOICE.bottled, { chance: 0.6 });
   for (const ev of events) {
+    if (ev.type === 'hit' && ev.heavy) {
+      voice(VOICE.hurt, { chance: 0.35 });
+      if (ev.by >= 0) voice(ev.by === 0 ? VOICE.conradSwing : VOICE.georgeSwing, { chance: 0.15 });
+    }
+    if (ev.type === 'counter') voice(VOICE.hurt, { chance: 0.4 });
+    if (ev.type === 'slam') voice(VOICE.floored, { chance: 0.5 });
+    if (ev.type === 'ko') voice(ev.boss ? VOICE.bossDown : VOICE.floored, ev.boss ? { interrupt: true } : { chance: 0.35 });
+    if (ev.type === 'enrage') voice(VOICE.bossBackup, { interrupt: true });
+    if (ev.type === 'joined' && ev.player === 1) voice(VOICE.georgeJoin, { interrupt: true });
+    if (ev.type === 'playerDown' && w.players.length > 1) voice(ev.player === 0 ? VOICE.conradDown : VOICE.georgeDown, { interrupt: true });
+    if (ev.type === 'wave' && ev.n === 0) voice(VOICE.conradStart, { interrupt: true });
+    if (ev.type === 'wave' && ev.n === T.waves.length - 1) voice(VOICE.bossIntro, { interrupt: true });
     if (ev.type === 'hit') { sfx.hit(ev.heavy); if (ev.by >= 0) rumble(ev.by, ev.heavy ? 0.7 : 0.3, 0.5, ev.heavy ? 120 : 60); }
     if (ev.type === 'counter') { sfx.counter(); rumble(ev.by, 1, 0.6, 140); }
     if (ev.type === 'tag') sfx.counter();
@@ -94,8 +108,24 @@ function showResult(w: World) {
   if (w.result === lastResult) return;
   lastResult = w.result;
   if (w.result !== 'playing') playMusic('title');
+  if (w.result === 'win') voice(VOICE.win, { interrupt: true });
   if (w.result === 'win') say("LAST CALL<small>Kilroy's is yours · Start / Enter to go again</small>");
   if (w.result === 'lose') say('KNOCKED OUT<small>Start / Enter to try again</small>');
+}
+
+// Voice cues that come from state changes rather than events: frats taunt as they step in,
+// and the President roars on his haymaker. Ambience follows the stage.
+const seen = new Map<number, string>();
+function watch(w: World) {
+  if (started) ambient(w.stage === 0 ? 'street' : 'club');
+  for (const e of w.enemies) {
+    const was = seen.get(e.id);
+    if (was !== e.state) {
+      if (e.state === 'approach' && was === 'circle') voice(VOICE.taunt, { chance: 0.3 });
+      if (e.state === 'windup' && e.kind === 'boss' && e.unblockable) voice(VOICE.bossSwing, { interrupt: true });
+      seen.set(e.id, e.state);
+    }
+  }
 }
 
 function guestTick() {
@@ -115,6 +145,7 @@ function guestTick() {
     world = w;
     renderer.events(g.events);
     react(g.takeEvents(), w);
+    watch(w);
     showResult(w);
   }
 }
@@ -165,6 +196,7 @@ function hostTick() {
   step(world, inputs);
   renderer.events(world.events);
   react(world.events, world);
+  watch(world);
   host?.queue(world.events);
   if (world.frame % 2 === 0) host?.snapshot(world);
   showResult(world);

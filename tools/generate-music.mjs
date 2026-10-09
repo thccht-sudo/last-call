@@ -11,6 +11,28 @@ const STYLE = 'Pure retro synthwave and darksynth instrumental for a neon night-
   'no slap bass, no guitar, no saxophone, no vocals.';
 
 const TRACKS = {
+  // Not music: Lyria asked for isolated one-shots and ambience, sliced by tools/slice-sfx.mjs.
+  punches: {
+    model: 'google/lyria-3-clip-preview',
+    prompt: 'Sound effects only, no music, no melody, no beat, no rhythm: a series of separate heavy movie-fight punch impacts, ' +
+      'meaty body blows and face punches, each one isolated, followed by a full second of silence. Dry foley recording.',
+  },
+  glass: {
+    model: 'google/lyria-3-clip-preview',
+    prompt: 'Sound effects only, no music, no melody, no rhythm: a series of separate glass beer bottles smashing on a brick floor, ' +
+      'each smash isolated, followed by a full second of silence. Dry foley recording.',
+  },
+  street: {
+    model: 'google/lyria-3-clip-preview',
+    prompt: 'Ambient field recording, no music: a busy college bar street at midnight, muffled bass from inside a club, ' +
+      'crowd chatter and laughter, distant whoops, a car passing. Seamless loop.',
+  },
+  club: {
+    model: 'google/lyria-3-clip-preview',
+    prompt: 'Ambient field recording, no music melody: inside a packed college bar, loud crowd chatter, glasses clinking, ' +
+      'people shouting orders at the bar, laughter. Seamless loop.',
+  },
+
   title: {
     model: 'google/lyria-3-clip-preview',
     prompt: `${STYLE} Title screen loop: brooding and cool, 95 BPM, slow-building arpeggio over a low pulsing bass, ` +
@@ -59,11 +81,12 @@ async function generate(name) {
     }
   }
   if (!chunks.length) throw new Error(`${name}: no audio returned. Text: ${text.slice(0, 300)}`);
-  mkdirSync('public/music', { recursive: true });
+  mkdirSync('public/music', { recursive: true }); mkdirSync('public/sfx', { recursive: true });
   const raw = `/tmp/lastcall-${name}.${format}`;
   writeFileSync(raw, Buffer.concat(chunks));
-  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', raw, '-c:a', 'libmp3lame', '-q:a', '4', `public/music/${name}.mp3`]);
-  console.log(`${name}: ${format} -> public/music/${name}.mp3`, text ? `(${text.slice(0, 120).replace(/\n/g, ' ')})` : '');
+  const out = ['punches', 'glass', 'street', 'club'].includes(name) ? `public/sfx/${['street', 'club'].includes(name) ? name : 'raw-' + name}.mp3` : `public/music/${name}.mp3`;
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', raw, '-c:a', 'libmp3lame', '-q:a', '4', out]);
+  console.log(`${name}: ${format} ->`, out, text ? `(${text.slice(0, 120).replace(/\n/g, ' ')})` : '');
 }
 
-for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(TRACKS)) await generate(name);
+await Promise.all((process.argv.slice(2).length ? process.argv.slice(2) : ['title', 'fight', 'boss']).map(generate));

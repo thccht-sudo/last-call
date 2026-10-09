@@ -60,4 +60,6 @@ level layout (patio, fence, tables, lamppost, spawns) in `src/sim/level.ts`, and
 Motion capture: [Bandai Namco Research Motion Dataset](https://github.com/BandaiNamcoResearchInc/Bandai-Namco-Research-Motiondataset)
 by Bandai Namco Research Inc., licensed [CC BY-NC 4.0](src/anim/MOCAP-LICENSE.txt), retargeted
 and retimed for this game. Because of that license, this game is and stays non-commercial.
-Music generated with Google Lyria 3. Everything else built by Claude.
+Music, punch and glass sounds, and street and bar ambience generated with Google Lyria 3; voice
+lines performed by OpenAI's GPT audio; both through OpenRouter (`tools/generate-music.mjs`,
+`tools/generate-voice.mjs`, `tools/slice-sfx.py`). Everything else built by Claude.
