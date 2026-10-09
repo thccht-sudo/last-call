@@ -1,6 +1,6 @@
 // Deterministic fight simulation. No rendering, no clock: step() advances one 60 Hz frame.
 import { TUNING as T, EnemyKind, MoveName, AttackName } from './tuning';
-import { LEVEL, LEVELS, steer, collide, insideObstacle, clearLine, useStage, activeLevel } from './level';
+import { LEVELS, CONCERT_STAGE, steer, collide, insideObstacle, clearLine, useStage, activeLevel } from './level';
 
 export interface Vec { x: number; y: number }
 
@@ -82,7 +82,14 @@ export interface Stats {
 }
 const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0, launches: 0, bestCombo: 0, perfects: 0, style: 0, bestRank: -1 });
 
+// 'bar': three rounds at Kilroy's, then you win. 'concert': The Hold Ready at the Salt Shed,
+// where the set (and the fight) never ends.
+export type Mode = 'bar' | 'concert';
+
+export interface Wave { stage: number; maxAttackers: number; enemies: EnemyKind[] }
+
 export interface World {
+  mode: Mode;
   frame: number; hitstop: number; shake: number;
   players: Player[]; enemies: Enemy[]; bottles: Bottle[]; cups: Cup[];
   difficulty: number; stats: Stats[];
@@ -120,15 +127,16 @@ export function addPlayer(w: World): Player {
   return p;
 }
 
-export function createWorld(seed = 1, playerCount = 1, difficulty = 1): World {
+export function createWorld(seed = 1, playerCount = 1, difficulty = 1, mode: Mode = 'bar'): World {
+  const stage = mode === 'concert' ? CONCERT_STAGE : 0;
   const w: World = {
-    frame: 0, hitstop: 0, shake: 0,
-    players: [newPlayer(0, LEVEL.playerStart)],
+    mode, frame: 0, hitstop: 0, shake: 0,
+    players: [newPlayer(0, LEVELS[stage].playerStart)],
     difficulty, stats: [newStats(), newStats()],
-    enemies: [], bottles: [], cups: [], stage: 0, wave: -1, waveTimer: 30, result: 'playing',
+    enemies: [], bottles: [], cups: [], stage, wave: -1, waveTimer: 30, result: 'playing',
     events: [], rng: seed >>> 0 || 1, nextId: 1,
   };
-  useStage(0);
+  useStage(stage);
   placeBottles(w);
   while (w.players.length < playerCount) addPlayer(w);
   w.events = [];
@@ -139,7 +147,7 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
   const k = T[kind];
   const e: Enemy = {
     id: w.nextId++, kind, pos: { ...pos }, facing: { x: 0, y: 1 }, vel: { x: 0, y: 0 },
-    hp: Math.round(k.hp * mods(w).enemyHp), maxHp: Math.round(k.hp * mods(w).enemyHp), state, t: 0, dur: state === 'spawn' ? 20 : 0,
+    hp: Math.round(k.hp * mods(w).enemyHp * toughness(w, kind)), maxHp: Math.round(k.hp * mods(w).enemyHp * toughness(w, kind)), state, t: 0, dur: state === 'spawn' ? 20 : 0,
     cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
     focus: 0, lastHitBy: -1, lastHitFrame: -999, attack: k.moves[0], unblockable: false, connected: false,
     z: 0, vz: 0, juggle: 0, string: 0, enraged: false, slammed: false, stomped: false, stop: 0, hitDir: { x: 0, y: 0 }, ring: 0, feint: 0,
@@ -169,12 +177,56 @@ function enterStage(w: World, stage: number) {
   w.events.push({ type: 'stage', stage });
 }
 
+// Song n of the endless set. A pure function of n, so every run faces the same setlist and
+// scores compare fairly.
+export function concertWave(n: number): Wave {
+  const C = T.concert;
+  let s = (Math.imul(n + 1, 2654435761) >>> 0) || 1;
+  const roll = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
+  const pool: Exclude<EnemyKind, 'boss'>[] = [];
+  for (const [kind, from] of Object.entries(C.unlock) as [Exclude<EnemyKind, 'boss'>, number][]) {
+    if (n >= from) pool.push(...Array<typeof kind>(kind === 'thug' ? 3 : 1).fill(kind));
+  }
+  const encore = (n + 1) % C.bossEvery === 0;
+  const count = Math.min(C.maxCount, C.startCount + Math.floor(n / 2));
+  const enemies: EnemyKind[] = encore ? ['boss'] : [];
+  while (enemies.length < (encore ? count - 1 : count)) {
+    const kind = pool[Math.floor(roll() * pool.length)];
+    // No more than two cup throwers or two heavies at once: a wall of red is a dodge lottery.
+    if ((kind === 'thrower' || kind === 'heavy') && enemies.filter(k => k === kind).length >= 2) continue;
+    enemies.push(kind);
+  }
+  return { stage: CONCERT_STAGE, maxAttackers: Math.min(C.maxAttackers, 1 + Math.floor(n / C.attackersEvery)), enemies };
+}
+
+export const waveSpec = (w: World, n: number): Wave => w.mode === 'concert' ? concertWave(n) : T.waves[n];
+
+// Enemy health multiplier beyond difficulty: the set wears you down by toughening the crowd.
+function toughness(w: World, kind: EnemyKind) {
+  if (w.mode !== 'concert') return 1;
+  return Math.min(T.concert.maxHp, 1 + T.concert.hpPerWave * Math.max(0, w.wave)) * (kind === 'boss' ? T.concert.bossHp : 1);
+}
+
+// Between songs: a water for everyone standing, and the downed get back up.
+function intermission(w: World) {
+  for (const p of w.players) {
+    if (p.state === 'down') {
+      p.hp = T.concert.reviveHp; p.revive = 0; setPlayer(p, 'free', 0);
+      w.events.push({ type: 'revived', player: p.index });
+    } else p.hp = Math.min(T.player.hp, p.hp + T.concert.heal);
+  }
+  // The long-since knocked out are carried off, so the floor (and the snapshot) stays small.
+  w.enemies = w.enemies.filter(e => alive(e) || e.t < 300);
+}
+
 function startWave(w: World, n: number) {
-  if (T.waves[n].stage !== w.stage) enterStage(w, T.waves[n].stage);
+  const wave = waveSpec(w, n);
+  if (wave.stage !== w.stage) enterStage(w, wave.stage);
+  if (w.mode === 'concert' && n > 0) intermission(w);
   w.wave = n;
   w.events.push({ type: 'wave', n });
   const extra = Array.from({ length: (w.players.length - 1) * T.coop.extraPerWave }, () => 'thug' as const);
-  [...T.waves[n].enemies, ...extra].forEach((kind, i) => {
+  [...wave.enemies, ...extra].forEach((kind, i) => {
     const spawns = activeLevel().spawns;
     const s = spawns[i % spawns.length];
     const e = spawnEnemy(w, kind, s.from, 'spawn', s.to);
@@ -679,7 +731,8 @@ function dropBottle(w: World, p: Player, away: Vec) {
 
 // Returns true if the hit put the player down.
 function hurtPlayer(w: World, p: Player, base: number, from: Vec, heavy: boolean, knock: number, source: string): boolean {
-  const dmg = Math.max(1, Math.round(base * mods(w).damage));
+  const fury = w.mode === 'concert' ? Math.min(T.concert.maxDamage, 1 + T.concert.damagePerWave * Math.max(0, w.wave)) : 1;
+  const dmg = Math.max(1, Math.round(base * mods(w).damage * fury));
   const st = w.stats[p.index];
   st.taken += Math.min(dmg, p.hp); st.takenBy[source] = (st.takenBy[source] ?? 0) + Math.min(dmg, p.hp);
   p.hp -= dmg;
@@ -711,7 +764,8 @@ function strike(w: World, p: Player, e: Enemy) {
   const a = T.attacks[e.attack];
   // A swing that could have been countered and wasn't.
   if (!e.unblockable) w.stats[p.index].missedCounters++;
-  const source = e.kind === 'boss' ? (e.attack === 'haymaker' || e.attack === 'charge' ? 'the President\'s ' + SOURCE[e.attack] : 'the President') : SOURCE[e.attack];
+  const boss = w.mode === 'concert' ? 'the OG Fan' : 'the President';
+  const source = e.kind === 'boss' ? (e.attack === 'haymaker' || e.attack === 'charge' ? `${boss}'s ${SOURCE[e.attack]}` : boss) : SOURCE[e.attack];
   e.stop = e.unblockable ? T.hitstop.heavy : T.hitstop.light;
   if (!hurtPlayer(w, p, a.damage, e.pos, e.unblockable, a.knock, source)) setPlayer(p, 'hitstun', a.stun);
 }
@@ -743,7 +797,7 @@ function nearestStanding(w: World, from: Vec): Player | null {
 }
 
 function stepEnemies(w: World) {
-  const maxAttackers = (w.wave >= 0 ? T.waves[w.wave].maxAttackers : 1) + (w.players.length - 1);
+  const maxAttackers = (w.wave >= 0 ? waveSpec(w, w.wave).maxAttackers : 1) + (w.players.length - 1);
   // Attack tokens: only a few enemies commit at once, the rest circle.
   if (attackersBusy(w) < maxAttackers && w.players.some(standing)) {
     let pick: Enemy | null = null, pickD = Infinity;
@@ -1002,8 +1056,11 @@ export function step(w: World, inputs: Input | Input[]): World {
 
   if (w.enemies.every(e => !alive(e))) {
     if (w.waveTimer > 0) w.waveTimer--;
-    else if (w.wave + 1 < T.waves.length) { startWave(w, w.wave + 1); w.waveTimer = T.waveDelay; }
-    else w.result = 'win';
+    // The concert never ends: there's always one more song.
+    else if (w.mode === 'concert' || w.wave + 1 < T.waves.length) {
+      startWave(w, w.wave + 1);
+      w.waveTimer = w.mode === 'concert' ? T.concert.waveDelay : T.waveDelay;
+    } else w.result = 'win';
   }
   return w;
 }

@@ -25,6 +25,10 @@ export const VOICE = {
   conradStart: ['conrad1'], conradSwing: ['conrad2'], georgeJoin: ['george1'], georgeSwing: ['george2'],
   conradDown: ['down1'], georgeDown: ['down2'], win: ['win'],
   conradEvade: ['evade1'], georgeEvade: ['evade2'], conradRank: ['rank1'], georgeRank: ['rank2'], stomped: ['stomp1'],
+  // The Salt Shed: chopped uncs, the OG Fan, the frontman between songs (band1..6 match BANTER).
+  uncTaunt: ['unc1', 'unc2', 'unc3', 'unc4', 'unc5', 'unc6'], uncBottled: ['unc7'], uncFloored: ['unc8'],
+  ogIntro: ['og1'], ogBackup: ['og2'], ogSwing: ['og3'], ogDown: ['og4'],
+  band: ['band1', 'band2', 'band3', 'band4', 'band5', 'band6'], conradConcert: ['conrad3'],
 } as const;
 
 export function unlockAudio() {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable, counterWindow, styleRank } from '../src/sim/world';
+import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable, counterWindow, styleRank, concertWave } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
-import { insideObstacle } from '../src/sim/level';
+import { insideObstacle, CONCERT_STAGE } from '../src/sim/level';
 import type { EnemyKind } from '../src/sim/tuning';
 
 const press = (k: Partial<Input>): Input => ({ ...NO_INPUT, ...k });
@@ -661,5 +661,105 @@ describe('targeting around furniture', () => {
     const open = spawnEnemy(w, 'thug', { x: 0.6, y: -1.0 }, 'stun'); open.dur = 999;
     step(w, press({ attack: true, my: -1, mx: 0.3 }));
     expect(w.players[0].target).toBe(open.id);
+  });
+});
+
+describe('The Hold Ready at the Salt Shed (endless)', () => {
+  const kill = (w: World) => { for (const e of w.enemies) if (e.state !== 'dead') { e.hp = 0; e.state = 'dead'; e.t = 0; } };
+
+  it('starts on the concert floor and the set never ends: there is always one more song', () => {
+    const w = createWorld(4, 1, 1, 'concert');
+    expect(w.stage).toBe(CONCERT_STAGE);
+    for (let song = 0; song < 25; song++) {
+      for (let i = 0; i < 2000 && w.wave < song; i++) step(w, NO_INPUT);
+      expect(w.wave).toBe(song);
+      expect(w.result).toBe('playing');
+      w.players[0].hp = T.player.hp; // keep the test about the setlist, not the fight
+      kill(w);
+    }
+    expect(w.stage).toBe(CONCERT_STAGE);
+  });
+
+  it('the setlist is the same every night and builds: bigger crowds, more at once, an OG Fan every encore', () => {
+    expect(concertWave(7)).toEqual(concertWave(7));
+    let prev = 0;
+    for (let n = 0; n < 40; n++) {
+      const wave = concertWave(n);
+      // The OG Fan counts for two.
+      const size = wave.enemies.length + (wave.enemies.includes('boss') ? 1 : 0);
+      expect(size).toBeGreaterThanOrEqual(prev);
+      prev = size;
+      expect(size).toBeLessThanOrEqual(T.concert.maxCount);
+      expect(wave.maxAttackers).toBeLessThanOrEqual(T.concert.maxAttackers);
+      expect(wave.enemies.includes('boss')).toBe((n + 1) % T.concert.bossEvery === 0);
+      for (const kind of ['thrower', 'heavy'] as const) expect(wave.enemies.filter(k => k === kind).length).toBeLessThanOrEqual(2);
+      for (const kind of wave.enemies) if (kind !== 'boss') expect(n).toBeGreaterThanOrEqual(T.concert.unlock[kind]);
+    }
+    expect(concertWave(0).maxAttackers).toBeLessThan(concertWave(30).maxAttackers);
+  });
+
+  it('later songs bring tougher uncs', () => {
+    const w = createWorld(4, 1, 1, 'concert');
+    w.wave = 0;
+    const early = spawnEnemy(w, 'thug', { x: 0, y: 0 }, 'circle');
+    w.wave = 10;
+    const late = spawnEnemy(w, 'thug', { x: 1, y: 0 }, 'circle');
+    expect(late.maxHp).toBeGreaterThan(early.maxHp);
+  });
+
+  it('between songs the standing get a water and the downed get back up', () => {
+    const w = createWorld(4, 2, 1, 'concert');
+    run(w, 40);
+    expect(w.wave).toBe(0);
+    const [a, b] = w.players;
+    a.hp = 50;
+    b.hp = 0; b.state = 'down';
+    b.pos = { x: a.pos.x + 6, y: a.pos.y }; // too far for a revive: the intermission does it
+    kill(w);
+    for (let i = 0; i < 400 && w.wave === 0; i++) step(w, NO_INPUT);
+    expect(w.wave).toBe(1);
+    expect(a.hp).toBe(50 + T.concert.heal);
+    expect(b.state).toBe('free');
+    expect(b.hp).toBe(T.concert.reviveHp);
+  });
+
+  it('the knocked out are carried off between songs', () => {
+    const w = createWorld(4, 1, 1, 'concert');
+    for (let song = 0; song < 12; song++) {
+      for (let i = 0; i < 2000 && w.wave < song; i++) step(w, NO_INPUT);
+      w.players[0].hp = T.player.hp;
+      kill(w);
+      for (const e of w.enemies) e.t = 400;
+    }
+    expect(w.enemies.length).toBeLessThanOrEqual(T.concert.maxCount + 1);
+  });
+
+  it('never lets more uncs commit than the song allows, and nobody ends up inside the furniture', () => {
+    const w = createWorld(8, 1, 1, 'concert');
+    let worst = 0;
+    for (let i = 0; i < 60 * 240 && w.result === 'playing'; i++) {
+      step(w, botFor(w, 0));
+      if (w.wave < 0) continue;
+      const busy = w.enemies.filter(e => e.state === 'approach' || e.state === 'windup' || e.state === 'active').length;
+      worst = Math.max(worst, busy - concertWave(w.wave).maxAttackers);
+      for (const b of [w.players[0], ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead')]) expect(insideObstacle(b.pos)).toBe(false);
+    }
+    expect(worst).toBeLessThanOrEqual(0);
+  });
+
+  it('a player who reads prompts gets through the first encore', () => {
+    for (const seed of [1, 2, 3]) {
+      const w = createWorld(seed, 1, 1, 'concert');
+      for (let i = 0; i < 60 * 600 && w.result === 'playing' && w.wave < T.concert.bossEvery; i++) step(w, botFor(w, 0));
+      expect(w.wave, `seed ${seed} hp ${w.players[0].hp}`).toBe(T.concert.bossEvery);
+    }
+  });
+
+  it('is deterministic for a seed', () => {
+    const a = createWorld(11, 2, 1, 'concert'), b = createWorld(11, 2, 1, 'concert');
+    for (let i = 0; i < 3000; i++) {
+      step(a, [botFor(a, 0), botFor(a, 1)]); step(b, [botFor(b, 0), botFor(b, 1)]);
+    }
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });

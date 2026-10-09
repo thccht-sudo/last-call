@@ -50,6 +50,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b20; col
 #title th { opacity: 0.6; font-weight: 600; }
 #title ul { margin: 0; padding-left: 18px; max-width: 340px; font-size: 14px; line-height: 1.5; min-width: 0; }
 #title .diff { text-align: center; margin: 18px 0 6px; font-size: 14px; }
+#title .modes { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: center; margin: 18px 0 0; }
+#title .modes > small { opacity: 0.5; font-size: 14px; }
+#title .mode { display: grid; gap: 2px; padding: 8px 14px; border: 1px solid #ffffff33; border-radius: 6px; cursor: pointer; opacity: 0.55; text-align: center; min-width: 200px; }
+#title .mode b { letter-spacing: 3px; }
+#title .mode span, #title .mode small { font-size: 12px; opacity: 0.8; }
+#title .mode.on { opacity: 1; border-color: #ffd23f; box-shadow: 0 0 16px #ffd23f44; }
+#title .mode.on b { color: #ffd23f; }
+#title .setting { display: none; text-align: center; font-size: 13px; opacity: 0.75; margin: 8px auto 0; max-width: 520px; }
+#title.concert .setting[data-for="concert"] { display: block; }
+#np { position: fixed; left: 20px; top: 112px; font-size: 13px; letter-spacing: 1px; padding: 6px 12px; background: #000b; border-left: 3px solid #ff5a2a;
+  border-radius: 3px; opacity: 0; transform: translateX(-12px); transition: opacity 400ms, transform 400ms; pointer-events: none; }
+#np.on { opacity: 1; transform: none; }
+#np b { color: #ffd23f; }
+#setcount { position: fixed; bottom: 12px; left: 20px; font-weight: 900; letter-spacing: 3px; font-size: 13px;
+  color: #ffd9a0; background: #000b; border: 1px solid #ff5a2a88; padding: 4px 12px; border-radius: 4px; pointer-events: none; }
 #title .diff span { display: inline-block; padding: 3px 10px; margin: 0 2px; border: 1px solid #ffffff33; border-radius: 4px; cursor: pointer; opacity: 0.55; }
 #title .diff span.on { opacity: 1; background: #ffd23f; color: #222; border-color: #ffd23f; font-weight: 800; }
 #title .diff small { opacity: 0.5; margin-left: 6px; }

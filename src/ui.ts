@@ -1,11 +1,24 @@
 // Title card, first-time tips, pause menu, results screen and the FPS readout. Settings are kept
 // per browser in localStorage when it's available.
 import { TUNING as T } from './sim/tuning';
-import { World, counterable, counterWindow, deflectable } from './sim/world';
+import { World, Mode, counterable, counterWindow, deflectable } from './sim/world';
 import { CAST } from './render';
 
-export interface Settings { music: number; sfx: number; voice: number; difficulty: number; quality: 'auto' | 'high' | 'low'; fps: boolean }
-const DEFAULTS: Settings = { music: 1, sfx: 1, voice: 1, difficulty: 1, quality: 'auto', fps: false };
+export interface Settings { music: number; sfx: number; voice: number; difficulty: number; quality: 'auto' | 'high' | 'low'; fps: boolean; mode: Mode }
+const DEFAULTS: Settings = { music: 1, sfx: 1, voice: 1, difficulty: 1, quality: 'auto', fps: false, mode: 'bar' };
+
+// The endless mode's record: most songs lasted, per browser.
+export function bestSongs(): number {
+  try { return Number(localStorage.getItem('lastcall-best-songs')) || 0; } catch { return 0; }
+}
+function recordSongs(n: number) {
+  try { if (n > bestSongs()) localStorage.setItem('lastcall-best-songs', String(n)); } catch { /* storage blocked */ }
+}
+
+export const MODES: { mode: Mode; name: string; blurb: string }[] = [
+  { mode: 'bar', name: 'LAST CALL', blurb: "Three rounds at Kilroy's on Kirkwood" },
+  { mode: 'concert', name: 'THE HOLD READY', blurb: 'Endless: their shows never end' },
+];
 
 export function loadSettings(): Settings {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('lastcall-settings') ?? '{}') }; } catch { return { ...DEFAULTS }; }
@@ -43,11 +56,19 @@ export function showTitle(s: Settings, guest: boolean) {
         <li>Second player: press any button on another controller, or the arrow keys.</li>
       </ul>
     </div>
+    <div class="modes">${MODES.map(m => `<div class="mode ${m.mode === s.mode ? 'on' : ''}" data-m="${m.mode}"><b>${m.name}</b><span>${m.blurb}</span>${m.mode === 'concert' && bestSongs() ? `<small>best: ${bestSongs()} songs</small>` : ''}</div>`).join('')}
+      <small>↑ ↓</small></div>
+    <p class="setting" data-for="concert">Live at the Salt Shed, Chicago. The chopped uncs want their spot back, the encores bring the OG Fan, and the set goes on until you can't.</p>
     <p class="diff">Difficulty: ${T.difficulty.map((d, i) => `<span class="${i === s.difficulty ? 'on' : ''}" data-d="${i}">${d.name}</span>`).join(' ')}
       <small>← → or 1 2 3</small></p>
     <p class="go">Click, then press <b>Start</b> / <b>Enter</b> to fight · <b>O</b> / <b>Select</b> to play online</p>`;
+  t.classList.toggle('concert', s.mode === 'concert');
 }
 export function hideTitle() { el('title').hidden = true; }
+export function setTitleMode(m: Mode) {
+  el('title').querySelectorAll<HTMLElement>('.mode').forEach(sp => sp.classList.toggle('on', sp.dataset.m === m));
+  el('title').classList.toggle('concert', m === 'concert');
+}
 export function setTitleDifficulty(d: number) {
   el('title').querySelectorAll<HTMLElement>('.diff span').forEach(sp => sp.classList.toggle('on', Number(sp.dataset.d) === d));
 }
@@ -161,8 +182,12 @@ export function showResults(w: World) {
       ${worst ? `<p class="worst">Hurt most by ${worst[0]} (${worst[1]})</p>` : ''}
     </div>`;
   }).join('');
-  const title = w.result === 'win' ? "LAST CALL" : 'KNOCKED OUT';
-  const sub = w.result === 'win' ? "Kilroy's is yours" : `Made it to round ${w.wave + 1} of ${T.waves.length}`;
+  const songs = Math.max(0, w.wave);
+  if (w.mode === 'concert') recordSongs(songs);
+  const title = w.mode === 'concert' ? 'THE SET GOES ON' : w.result === 'win' ? "LAST CALL" : 'KNOCKED OUT';
+  const sub = w.mode === 'concert'
+    ? `You lasted ${songs} song${songs === 1 ? '' : 's'} · The Hold Ready kept playing · best ${bestSongs()}`
+    : w.result === 'win' ? "Kilroy's is yours" : `Made it to round ${w.wave + 1} of ${T.waves.length}`;
   r.innerHTML = `<h2>${title}</h2><p class="sub">${sub} · ${time} · ${T.difficulty[w.difficulty].name}</p>
     <div class="cols">${cols}</div><p class="go">Start / Enter to fight again</p>`;
   r.hidden = false;

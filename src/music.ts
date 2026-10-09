@@ -1,6 +1,8 @@
 // Soundtrack generated with Google Lyria 3 via OpenRouter (tools/generate-music.mjs).
-// One looping track at a time, crossfaded. M toggles mute.
-export type Track = 'title' | 'fight' | 'boss';
+// One track at a time, crossfaded: the bar fight's loops, or The Hold Ready's setlist played
+// through song after song, forever. M toggles mute.
+import { TRACKS } from './setlist';
+export type Track = 'title' | 'fight' | 'boss' | (typeof TRACKS)[number]['file'];
 
 let VOLUME = 0.45;
 const FADE_MS = 1200;
@@ -34,6 +36,26 @@ function fade(a: HTMLAudioElement, to: number, then?: () => void) {
     if (k < 1) requestAnimationFrame(stepFade); else then?.();
   };
   requestAnimationFrame(stepFade);
+}
+
+// The endless mode's setlist: each song plays through once, then the next, round and round.
+// `announce` hears each song's title as it starts.
+let song = -1;
+let announce: (title: string) => void = () => {};
+export function playSetlist(onSong: (title: string) => void) {
+  announce = onSong;
+  if (TRACKS.some(t => t.file === current)) return; // already playing
+  song = -1;
+  nextSong();
+}
+function nextSong() {
+  song = (song + 1) % TRACKS.length;
+  const t = TRACKS[song];
+  const a = el(t.file);
+  a.loop = false;
+  a.onended = () => { if (current === t.file) nextSong(); };
+  playMusic(t.file);
+  if (current === t.file) announce(t.title);
 }
 
 export function playMusic(t: Track) {

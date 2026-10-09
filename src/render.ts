@@ -4,6 +4,7 @@ import { TUNING as T, EnemyKind } from './sim/tuning';
 import { World, Enemy, Player, GameEvent, Vec, counterable, counterWindow, deflectable, framesToStrike } from './sim/world';
 import { buildKilroys } from './scene/kilroys';
 import { buildInterior } from './scene/interior';
+import { buildSaltShed } from './scene/saltshed';
 import { LEVELS } from './sim/level';
 import { Figure, Look } from './figure';
 import { CLIPS, Pose, mix, J } from './anim/pose';
@@ -47,6 +48,48 @@ export const thugLook = (kind: EnemyKind, id: number): Look => {
     hatColor: kind === 'kicker' ? 0xd8261c : [0xf2f2f2, 0x990000, 0xc9b27c, 0x2a5cc4][(id * 3) % 4], // white, IU crimson, khaki, royal
     shades: kind === 'boss', chain: kind === 'boss',
   };
+};
+
+// The Salt Shed crowd: chopped uncs, 45 and dressed like it's still 2004. Cargo shorts with
+// white socks pulled up and dad sneakers, tucked-in polos with braided belts, old tour shirts,
+// flame shirts, fanny packs, frosted tips, horseshoe hair and mullets, goatees, wraparound shades
+// pushed up on the head, a Bluetooth earpiece. The big ones are always in flames; the OG Fan
+// wears his 412-show tour shirt.
+const TEES = [
+  { text: 'THE HOLD\nREADY', sub: '2004 TOUR', ink: '#f2e6c4' },
+  { text: 'STAY\nREADY', ink: '#ffd23f' },
+  { text: 'NO\nCURFEW', sub: 'SALT SHED', ink: '#ff6a3d' },
+  { text: "WORLD'S\nOKAYEST DAD", ink: '#f4f1ea' },
+  { text: 'I SAW THEM\nFIRST', ink: '#9fd4f0' },
+  { text: 'HOLD READY', sub: 'ENDLESS NIGHTS', ink: '#e8e8e8' },
+];
+const UNC_SHIRTS = [0x2a2a2e, 0x6a2a3a, 0x8a9a6a, 0x2a4a7a, 0xb0c4de, 0xd8cfb4, 0x5a3a6a, 0x9a3a2a];
+const SHORTS = [0xb8a47c, 0x8a7a5a, 0x6a6a52, 0x5a6a7a];
+const JEANS = [0x5a7aa8, 0x6f8db5, 0x3a4a6a];
+const UNC_HAIR = [0x8a8278, 0x5a4a3a, 0x2a1d16, 0x6b4a2a, 0xa09a90];
+const pickN = <T>(xs: readonly T[], id: number, k: number) => xs[(id * k) % xs.length];
+export const uncLook = (kind: EnemyKind, id: number): Look => {
+  const hair = pickN(UNC_HAIR, id, 3);
+  const base: Look = {
+    shirt: pickN(UNC_SHIRTS, id, 5), pants: pickN(SHORTS, id, 3), skin: pickN(SKINS, id, 7), hair,
+    scale: SCALE[kind], shorts: true, shoes: 0xf2f2f2,
+    build: kind === 'heavy' || kind === 'boss' ? 'heavy' : kind === 'kicker' || kind === 'thrower' ? 'lean' : 'regular',
+    hairStyle: (['frosted', 'horseshoe', 'mullet', undefined] as const)[(id * 5) % 4],
+    goatee: id % 3 === 0 ? hair : undefined, wraps: id % 2 === 1, earpiece: id % 5 === 2,
+  };
+  const tee = id % 2 === 0 ? pickN(TEES, id, 7) : undefined;
+  switch (kind) {
+    case 'thug': // the classic: band tee or polo, cargo shorts, maybe a fanny pack and a trucker cap
+      return { ...base, tee, collar: tee ? undefined : base.shirt, fannyPack: id % 3 === 1 ? 0x1a1a1a : undefined, hat: id % 4 === 1 ? 'dad' : undefined, hatColor: pickN([0x2a3a5a, 0x6a1a1a, 0x2a4a2a, 0x8a6a3a], id, 3) };
+    case 'heavy': // big unc: flame shirt, bootcut jeans, goatee, shades up
+      return { ...base, shirt: 0x141414, flames: true, shorts: false, pants: pickN(JEANS, id, 1), goatee: hair, wraps: true, belt: 0x5a3a20 };
+    case 'thrower': // tucked-in oxford, braided belt, pleated khakis, earpiece in
+      return { ...base, shirt: pickN([0xb0c4de, 0xe8e4d8, 0x9ab0c8], id, 1), collar: 0xe8e4d8, longSleeves: true, belt: 0x6a4a2a, shorts: false, pants: 0xc9b48a, earpiece: true, hairStyle: 'horseshoe' };
+    case 'kicker': // the dad dancer: tour shirt, frosted tips, shades on his head
+      return { ...base, tee: pickN(TEES, id + 1, 1), hairStyle: 'frosted', wraps: true, fannyPack: 0x2a5a8a };
+    case 'boss': // the OG Fan
+      return { ...base, shirt: 0x161616, tee: { text: 'THE HOLD\nREADY', sub: '412 SHOWS', ink: '#ffd23f' }, pants: 0x4a5a7a, hat: 'dad', hatColor: 0x161616, hair: 0xa09a90, hairStyle: 'horseshoe', goatee: 0xa09a90, wraps: true, fannyPack: 0x111111, chain: true };
+  }
 };
 
 const MOVE_WORDS: Partial<Record<string, string>> = { sweep: 'SWEEP', uppercut: 'LAUNCH', riposte: 'RIPOSTE', knee: 'KNEE!', stomp: 'STOMP', roundhouse: 'KICK', smash: 'BOTTLED' };
@@ -139,7 +182,7 @@ export class Renderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     // One group per stage: out front, then inside. Only the current one is drawn.
-    for (const build of [buildKilroys, buildInterior]) {
+    for (const build of [buildKilroys, buildInterior, buildSaltShed]) {
       const g = new THREE.Group();
       build(g);
       this.stages.push(g);
@@ -441,10 +484,10 @@ export class Renderer {
     return v;
   }
 
-  private enemyView(e: Enemy) {
+  private enemyView(e: Enemy, w: World) {
     let v = this.enemies.get(e.id);
     if (!v) {
-      const fig = new Figure(thugLook(e.kind, e.id), CLIPS.guard.frames[0]);
+      const fig = new Figure(w.mode === 'concert' ? uncLook(e.kind, e.id) : thugLook(e.kind, e.id), CLIPS.guard.frames[0]);
       this.scene.add(fig.root);
       const prompt = document.createElement('div'); prompt.className = 'prompt';
       const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
@@ -467,10 +510,11 @@ export class Renderer {
     this.world = w;
     this.ticks++;
     this.props[w.stage]?.step(LEVELS[w.stage].obstacles);
+    this.stages[w.stage]?.userData.animate?.(w);
     w.players.forEach((p, i) => this.posePlayer(p, this.playerView(i).fig, w));
     for (const e of w.enemies) {
       if (e.state === 'dead') { const n = (this.deadFor.get(e.id) ?? 0) + 1; this.deadFor.set(e.id, n); if (n > 300) continue; }
-      this.poseEnemy(e, this.enemyView(e).fig, w);
+      this.poseEnemy(e, this.enemyView(e, w).fig, w);
     }
     for (let i = this.fx.length - 1; i >= 0; i--) {
       const f = this.fx[i];
@@ -499,7 +543,7 @@ export class Renderer {
     if (w.stage !== this.shown) {
       this.shown = w.stage;
       this.stages.forEach((g, i) => { g.visible = i === w.stage; });
-      const sky = w.stage === 0 ? 0x0b0e1a : 0x120a08;
+      const sky = [0x0b0e1a, 0x120a08, 0x0a0710][w.stage] ?? 0x0b0e1a;
       this.scene.background = new THREE.Color(sky);
       this.scene.fog = new THREE.Fog(sky, 26, 48);
     }
@@ -521,7 +565,7 @@ export class Renderer {
     const seen = new Set<number>();
     for (const e of w.enemies) {
       seen.add(e.id);
-      const v = this.enemyView(e);
+      const v = this.enemyView(e, w);
       this.show(`e${e.id}`, v.fig, alpha);
       // The knocked out sink away after a few seconds so the floor doesn't fill with bodies.
       const gone = this.deadFor.get(e.id) ?? 0;
@@ -591,7 +635,7 @@ export class Renderer {
     const boss = w.enemies.find(e => e.kind === 'boss' && e.state !== 'dead');
     if (boss && !this.bossBar) {
       this.bossBar = document.createElement('div'); this.bossBar.className = 'bossbar';
-      this.bossBar.innerHTML = '<b>THE FIJI PRESIDENT</b><div><i></i></div>';
+      this.bossBar.innerHTML = `<b>${w.mode === 'concert' ? 'THE OG FAN' : 'THE FIJI PRESIDENT'}</b><div><i></i></div>`;
       this.overlay.append(this.bossBar);
     }
     if (this.bossBar) {

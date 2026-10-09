@@ -36,6 +36,26 @@ export const LINES = [
   ['rank1', 'ash', 'a man in a bar fight on a roll, shouting it like a bartender ringing the bell', 'LAST CALL!'],
   ['rank2', 'verse', 'a man in a bar fight on a roll, delighted, shouting', "Now we're talking!"],
   ['stomp1', 'onyx', 'a frat guy on the floor getting stepped on, a pained wheeze, no words', 'Hngh!'],
+  // The Salt Shed: chopped uncs, the OG Fan, and the band between songs.
+  ['unc1', 'ballad', 'a washed-up 45-year-old man at a rock concert, condescending', "I saw them at the Metro in oh-four. You don't even know the deep cuts."],
+  ['unc2', 'onyx', 'a middle-aged dad at a concert, annoyed, puffing his chest out', "Hey! I've been holding this spot since the opener."],
+  ['unc3', 'echo', 'a middle-aged man who thinks he is still cool, lecturing', 'Back in my day, we moshed with respect!'],
+  ['unc4', 'ash', 'a 45-year-old guy in cargo shorts, offended', 'These are my good cargo shorts, buddy.'],
+  ['unc5', 'verse', 'a middle-aged man yelling across a loud concert floor to his friends', 'Dave! Kevin! Get over here!'],
+  ['unc6', 'ballad', 'a middle-aged man bragging, a little out of breath', "My back's shot, but my fists still work."],
+  ['unc7', 'echo', 'a middle-aged man hit in the face, shocked and upset', 'Not the Oakleys!'],
+  ['unc8', 'onyx', 'a middle-aged man knocked to the floor, a long groan', 'Ohhh... my lower back...'],
+  ['og1', 'onyx', 'a big, gravelly, obsessive rock superfan in his fifties, slow and menacing', "Four hundred and twelve shows. And you're standing in my spot."],
+  ['og2', 'onyx', 'a rock superfan bellowing for his friends from the online fan forum', 'Message board guys! Front and center! NOW!'],
+  ['og3', 'onyx', 'a rock superfan winding up a huge punch, a roaring yell', 'STAY READY!'],
+  ['og4', 'onyx', 'a defeated rock superfan on the floor, wheezing but loyal', "I'll... still be here... for the encore."],
+  ['band1', 'echo', 'a raspy, sweaty indie-rock frontman shouting into a microphone to a huge concert crowd, delighted', "Thank you, Chicago! This next one's a new one!"],
+  ['band2', 'echo', 'a raspy indie-rock frontman shouting into a microphone to a concert crowd, then a sly aside', "We've got time for one more! ...And then one more after that."],
+  ['band3', 'echo', 'a raspy indie-rock frontman roaring into a microphone to a concert crowd', 'We are The Hold Ready, and we are not going home!'],
+  ['band4', 'echo', 'a hoarse indie-rock frontman asking a concert crowd, cheerful and exhausted', "Is everybody still having a good time? It's been six hours!"],
+  ['band5', 'echo', 'a raspy indie-rock frontman shouting a catchphrase to a concert crowd', 'Stay ready, Chicago!'],
+  ['band6', 'echo', 'a raspy indie-rock frontman dedicating a song to a concert crowd, amused', 'This one goes out to the guys fighting by the soundboard!'],
+  ['conrad3', 'ash', 'a tired, dry man in his thirties at a rock concert that will not end', "Didn't this start at eight?"],
 ];
 
 async function speak([name, voice, style, line]) {

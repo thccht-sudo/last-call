@@ -119,6 +119,21 @@ export const TUNING = {
   ] as { stage: number; maxAttackers: number; enemies: EnemyKind[] }[],
   waveDelay: 90,
 
+  // The Hold Ready at the Salt Shed: the endless mode. Every song is a wave and the set never
+  // ends. Waves grow by a man every other song up to `maxCount`, more of them commit at once as
+  // it goes on, tougher uncs join the mix by `unlock`, everyone gets a little sturdier each song,
+  // and every `bossEvery`th song is an encore led by the OG Fan. Between songs the standing
+  // grab a water (`heal`) and the downed get back up.
+  concert: {
+    startCount: 3, maxCount: 9, maxAttackers: 4, attackersEvery: 3,
+    unlock: { thug: 0, thrower: 1, kicker: 2, heavy: 3 } as Record<Exclude<EnemyKind, 'boss'>, number>,
+    bossEvery: 5, bossHp: 0.75, // the OG Fan is a little softer than the President, but he keeps coming back
+    hpPerWave: 0.04, maxHp: 1.8,
+    damagePerWave: 0.015, maxDamage: 1.6, // and hit harder, slowly, forever-ish
+    heal: 25, reviveHp: 40,
+    waveDelay: 150, // a breather between songs
+  },
+
   // Difficulty scales enemy damage, the counter window and enemy health.
   difficulty: [
     { name: 'EASY', damage: 0.6, window: 1.4, enemyHp: 0.8 },

@@ -11,7 +11,13 @@ export interface Look {
   longSleeves?: boolean;
   print?: { letters: string; ink: string }; // Greek letters across the chest and back
   build?: Build;
-  hat?: 'cap' | 'band'; hatColor?: number; shades?: boolean; chain?: boolean;
+  hat?: 'cap' | 'band' | 'dad'; hatColor?: number; shades?: boolean; chain?: boolean;
+  // Chopped-unc wear: cargo shorts with white socks pulled up, dad sneakers, a tucked-in shirt
+  // with a braided belt, a fanny pack, frosted tips or a horseshoe of hair, a goatee, wraparound
+  // shades pushed up on the head, a Bluetooth earpiece, a tour shirt from 2004, flames.
+  shorts?: boolean; shoes?: number; belt?: number; fannyPack?: number;
+  hairStyle?: 'frosted' | 'horseshoe' | 'mullet'; goatee?: number; wraps?: boolean; earpiece?: boolean;
+  tee?: { text: string; sub?: string; ink: string }; flames?: boolean;
 }
 export type Build = 'regular' | 'heavy' | 'lean';
 
@@ -28,6 +34,44 @@ function letterTexture(letters: string, ink: string) {
     printTex.set(key, t);
   }
   return printTex.get(key)!;
+}
+
+// A band or slogan tee: a big line and an optional small one under it.
+function teeTexture(tee: { text: string; sub?: string; ink: string }) {
+  const key = `tee:${tee.text}:${tee.sub}:${tee.ink}`;
+  if (!printTex.has(key)) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 180;
+    const g = c.getContext('2d')!;
+    g.fillStyle = tee.ink; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const lines = tee.text.split('\n');
+    const size = lines.length > 1 ? 50 : 62;
+    g.font = `900 ${size}px Impact, "Arial Black", sans-serif`;
+    lines.forEach((l, i) => g.fillText(l, 128, 60 + (i - (lines.length - 1) / 2) * size * 0.95, 244));
+    if (tee.sub) { g.font = '700 30px "Arial Black", Arial, sans-serif'; g.fillText(tee.sub, 128, 150, 244); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    printTex.set(key, t);
+  }
+  return printTex.get(key)!;
+}
+
+// Flames licking up from the hem: the 2003 classic.
+function flameTexture() {
+  if (!printTex.has('flames')) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 170;
+    const g = c.getContext('2d')!;
+    for (const [color, h] of [['#d41f10', 1], ['#ff8a12', 0.72], ['#ffd23a', 0.42]] as const) {
+      g.fillStyle = color; g.beginPath(); g.moveTo(0, 170);
+      for (let x = 0; x <= 256; x += 32) {
+        const peak = 170 - (90 + ((x * 37) % 60)) * h;
+        g.quadraticCurveTo(x + 4, 170 - 40 * h, x + 14, peak);
+        g.quadraticCurveTo(x + 18, 170 - 50 * h, x + 32, 170 - 20 * h);
+      }
+      g.lineTo(256, 170); g.closePath(); g.fill();
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    printTex.set('flames', t);
+  }
+  return printTex.get('flames')!;
 }
 
 const v = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z);
@@ -49,6 +93,9 @@ const LIMB: Record<string, [number, number, number, number, number]> = {
 };
 // Material slot for each modelled part.
 const SLOT: Record<string, number> = { shirt: 0, sleeveL: 1, sleeveR: 1, handL: 2, handR: 2, neck: 2, pants: 3, legL: 3, legR: 3, shoeL: 4, shoeR: 4 };
+const SOCKS = 5;
+// Shorts: leg below this rest height is bare (skin), and below the next it's sock.
+const HEM_Y = 0.46, SOCK_Y = 0.2;
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
 const _x = new THREE.Vector3(), _y = new THREE.Vector3(), _z = new THREE.Vector3(), _s = new THREE.Vector3(), _n = new THREE.Vector3();
@@ -85,31 +132,37 @@ const REST = Float32Array.from(BODIES.joints.flat());
 const REST_LEN: number[] = [];
 const REST_INV = BONES.map((_, i) => { const m = new THREE.Matrix4(); REST_LEN[i] = boneMatrix(REST, i, m); return m.invert(); });
 
-const geometries = new Map<Build, THREE.BufferGeometry>();
-function bodyGeometry(build: Build) {
-  let g = geometries.get(build);
+const geometries = new Map<string, THREE.BufferGeometry>();
+function bodyGeometry(build: Build, shorts = false) {
+  const key = `${build}:${shorts}`;
+  let g = geometries.get(key);
   if (g) return g;
-  const parts = Object.entries(BODIES.builds[build]).sort((a, b) => SLOT[a[0]] - SLOT[b[0]]);
-  const pos: number[] = [], nrm: number[] = [], si: number[] = [], sw: number[] = [], idx: number[] = [];
-  g = new THREE.BufferGeometry();
-  let slot = -1, groupStart = 0;
-  for (const [name, part] of parts) {
-    if (SLOT[name] !== slot) {
-      if (slot >= 0) g.addGroup(groupStart, idx.length - groupStart, slot);
-      slot = SLOT[name]; groupStart = idx.length;
-    }
+  const pos: number[] = [], nrm: number[] = [], si: number[] = [], sw: number[] = [];
+  const bySlot: number[][] = [[], [], [], [], [], []];
+  for (const [name, part] of Object.entries(BODIES.builds[build])) {
     const base = pos.length / 3;
     pos.push(...part.position); nrm.push(...part.normal); si.push(...part.skinIndex); sw.push(...part.skinWeight);
-    for (const i of part.index) idx.push(base + i);
+    const bare = shorts && (name === 'legL' || name === 'legR');
+    for (let t = 0; t < part.index.length; t += 3) {
+      let slot = SLOT[name];
+      if (bare) {
+        // Cargo shorts: the leg below the hem is skin, then a white sock up from the shoe.
+        const y = (part.position[part.index[t] * 3 + 1] + part.position[part.index[t + 1] * 3 + 1] + part.position[part.index[t + 2] * 3 + 1]) / 3;
+        slot = y < SOCK_Y ? SOCKS : y < HEM_Y ? 2 : slot;
+      }
+      bySlot[slot].push(base + part.index[t], base + part.index[t + 1], base + part.index[t + 2]);
+    }
   }
-  g.addGroup(groupStart, idx.length - groupStart, slot);
+  g = new THREE.BufferGeometry();
+  const idx: number[] = [];
+  bySlot.forEach((tris, slot) => { if (tris.length) { g!.addGroup(idx.length, tris.length, slot); idx.push(...tris); } });
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
   g.setIndex(idx);
   g.normalizeNormals();
-  geometries.set(build, g);
+  geometries.set(key, g);
   return g;
 }
 
@@ -162,7 +215,7 @@ export class Figure {
     const build = look.build ?? 'regular';
     const cloth = look.jacket ?? look.shirt;
     const sleeve = look.jacket !== undefined || look.longSleeves ? cloth : look.skin;
-    this.mats = [toon(cloth), toon(sleeve), toon(look.skin), toon(look.pants), toon(0x1a1a1c)];
+    this.mats = [toon(cloth), toon(sleeve), toon(look.skin), toon(look.pants), toon(look.shoes ?? 0x1a1a1c), toon(0xf2f0ea)];
 
     // Skeleton: one bone per body segment, posed directly in character space.
     const inverses: THREE.Matrix4[] = [];
@@ -174,7 +227,7 @@ export class Figure {
       inverses.push(REST_INV[i].clone());
     });
     const skeleton = new THREE.Skeleton(this.bones, inverses);
-    const geo = bodyGeometry(build);
+    const geo = bodyGeometry(build, look.shorts);
     const body = new THREE.SkinnedMesh(geo, this.mats);
     body.castShadow = true; body.frustumCulled = false;
     body.bind(skeleton, new THREE.Matrix4());
@@ -211,6 +264,41 @@ export class Figure {
         this.torso.add(decal);
       }
     }
+    // Torso frame: origin at the hips joint, y up the spine, z out of the chest.
+    const waist = build === 'heavy' ? { x: 0.175, z: 0.145, front: 0.165 } : build === 'lean' ? { x: 0.122, z: 0.088, front: 0.088 } : { x: 0.137, z: 0.097, front: 0.097 };
+    if (look.belt !== undefined) {
+      const belt = new THREE.Mesh(new THREE.TorusGeometry(1, 0.018, 4, 28), toon(look.belt));
+      belt.rotation.x = Math.PI / 2; belt.scale.set(waist.x + 0.006, waist.z + 0.006, 1.1); belt.position.y = 0.035;
+      const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.012), new THREE.MeshStandardMaterial({ color: 0xc9c2b0, metalness: 0.9, roughness: 0.3 }));
+      buckle.position.set(0, 0.035, waist.front + 0.012);
+      this.torso.add(belt, buckle);
+    }
+    if (look.fannyPack !== undefined) {
+      const packMat = toon(look.fannyPack);
+      const pack = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.12, 4, 8), packMat);
+      pack.rotation.z = Math.PI / 2; pack.position.set(0.02, 0.02, waist.front + 0.04); pack.scale.set(1, 1, 0.75);
+      const strap = new THREE.Mesh(new THREE.TorusGeometry(1, 0.008, 4, 28), toon(0x151515));
+      strap.rotation.x = Math.PI / 2; strap.scale.set(waist.x + 0.012, waist.z + 0.012, 1); strap.position.y = 0.04;
+      this.torso.add(pack, strap);
+    }
+    if (look.tee) {
+      const m = new THREE.MeshBasicMaterial({ map: teeTexture(look.tee), transparent: true, depthWrite: false });
+      for (const side of [1, -1]) {
+        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.24), m);
+        decal.position.set(0, this.torsoLen * 0.62, side * (this.chestDepth + (build === 'heavy' ? 0.02 : 0.012)));
+        if (side < 0) decal.rotation.y = Math.PI;
+        this.torso.add(decal);
+      }
+    }
+    if (look.flames) {
+      const m = new THREE.MeshBasicMaterial({ map: flameTexture(), transparent: true, depthWrite: false });
+      for (const side of [1, -1]) {
+        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.2), m);
+        decal.position.set(0, this.torsoLen * 0.3, side * (this.chestDepth + (build === 'heavy' ? 0.03 : 0.008)));
+        if (side < 0) decal.rotation.y = Math.PI;
+        this.torso.add(decal);
+      }
+    }
     this.root.add(this.torso);
 
     // Head, with its centre a little above the head joint.
@@ -222,14 +310,39 @@ export class Figure {
     this.head.add(skullInk);
     skull.position.y = 0.09; skull.castShadow = true;
     this.head.add(skull);
-    if (look.hair !== undefined && look.hat !== 'cap') {
+    if (look.hair !== undefined && look.hairStyle === 'horseshoe') {
+      // Bald on top: a ring of hair round the back and sides at ear height.
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.108, 0.026, 6, 20, Math.PI * 1.25), mat(look.hair, 0.95));
+      ring.rotation.set(Math.PI / 2, 0, Math.PI * 0.125 + Math.PI / 2); ring.position.set(0, 0.105, -0.008); ring.scale.set(1, 1.05, 0.7);
+      this.head.add(ring);
+    } else if (look.hair !== undefined && look.hat !== 'cap' && look.hat !== 'dad') {
       const hair = mat(look.hair, 0.95);
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.122, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hair);
       cap.position.set(0, 0.112, -0.022); cap.rotation.x = -0.32;
       this.head.add(cap);
       const tufts: [number, number, number][] = look.messy
         ? [[-0.05, 0.035, 0.4], [0.045, 0.055, -0.3], [0, -0.04, 0.1], [0.075, -0.012, -0.6], [-0.08, 0, 0.7]]
-        : [[0, 0.05, 0]];
+        : look.hairStyle === 'frosted' ? [] : [[0, 0.05, 0]];
+      if (look.hairStyle === 'frosted') {
+        // Gelled spikes, frosted at the tips.
+        const frost = mat(0xf2dc9a, 0.6);
+        for (let i = 0; i < 9; i++) {
+          const a = (i / 9) * Math.PI * 2, rr = i === 0 ? 0 : 0.055;
+          const x = Math.cos(a) * rr, z = Math.sin(a) * rr + 0.01;
+          const spike = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.07, 5), hair);
+          spike.position.set(x, 0.215, z); spike.rotation.set(z * 4, 0, -x * 4);
+          const tip = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.032, 5), frost);
+          tip.position.set(0, 0.035, 0);
+          spike.add(tip);
+          this.head.add(spike);
+        }
+      }
+      if (look.hairStyle === 'mullet') {
+        // Business in front, party in back.
+        const back = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.1, 4, 8), hair);
+        back.position.set(0, 0.02, -0.085); back.scale.set(1.5, 1, 0.6);
+        this.head.add(back);
+      }
       for (const [x, z, r] of tufts) {
         const t = new THREE.Mesh(new THREE.SphereGeometry(look.messy ? 0.048 : 0.07, 8, 6), hair);
         t.position.set(x, 0.205, z - 0.01); t.scale.set(1.25, 0.55, 1); t.rotation.z = r;
@@ -272,6 +385,44 @@ export class Figure {
       const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.005, 0.005), frame);
       bridge.position.set(0, 0.104, 0.121);
       this.head.add(bridge);
+    }
+    if (look.goatee !== undefined) {
+      // A goatee: chin tuft joined to a moustache.
+      const g = toon(look.goatee);
+      const chin = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), g);
+      chin.position.set(0, 0.012, 0.1); chin.scale.set(1.1, 1.4, 0.8);
+      const stache = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.04, 4, 8), g);
+      stache.rotation.z = Math.PI / 2; stache.position.set(0, 0.062, 0.113);
+      for (const sx of [-1, 1]) {
+        const side = new THREE.Mesh(new THREE.CapsuleGeometry(0.008, 0.035, 4, 6), g);
+        side.position.set(sx * 0.03, 0.04, 0.108); side.rotation.z = sx * 0.25;
+        this.head.add(side);
+      }
+      this.head.add(chin, stache);
+    }
+    if (look.earpiece) {
+      const ear = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.022, 0.05), new THREE.MeshStandardMaterial({ color: 0xb8bcc4, metalness: 0.8, roughness: 0.3 }));
+      ear.position.set(-0.118, 0.085, 0.02); ear.rotation.x = -0.4;
+      this.head.add(ear);
+    }
+    if (look.hat === 'dad') {
+      // A trucker cap worn the right way round: two-tone crown, a curved brim out front.
+      const capMat = toon(look.hatColor ?? 0x2a3a5a);
+      const crown = new THREE.Mesh(new THREE.SphereGeometry(0.126, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+      crown.position.set(0, 0.11, 0); crown.scale.set(1.02, 0.95, 1.05);
+      const front = new THREE.Mesh(new THREE.SphereGeometry(0.128, 12, 6, Math.PI * 0.18, Math.PI * 0.64, Math.PI * 0.08, Math.PI * 0.4), toon(0xf2f0ea));
+      front.position.copy(crown.position); front.scale.copy(crown.scale);
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.012, 16, 1, false, 0, Math.PI), capMat);
+      brim.position.set(0, 0.12, 0.1); brim.rotation.set(-0.12, -Math.PI / 2, 0); brim.scale.set(1, 1, 0.9);
+      this.head.add(crown, front, brim);
+    }
+    if (look.wraps) {
+      // Wraparound shades, mirrored orange, pushed up on the head (or the cap).
+      const lens = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 4, 20, Math.PI * 0.75), new THREE.MeshStandardMaterial({ color: 0xff8a1a, metalness: 0.9, roughness: 0.15, emissive: 0x3a1400 }));
+      lens.rotation.set(-Math.PI / 2 + 0.25, 0, Math.PI * 0.125);
+      lens.position.set(0, look.hat ? 0.2 : 0.19, 0.012);
+      lens.scale.set(1.02, 1.08, 1.6);
+      this.head.add(lens);
     }
     if (look.hat === 'cap') {
       // A backwards baseball cap: crown, a button on top, the brim over the back of the neck.

@@ -4,8 +4,9 @@ import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
 import { sfx, unlockAudio, voice, VOICE, ambient, setVolumes } from './audio';
-import { playMusic, toggleMute, setMusicVolume } from './music';
-import { loadSettings, saveSettings, Settings, showTitle, hideTitle, setTitleDifficulty, tips, openMenu, closeMenu, showResults, hideResults, Fps } from './ui';
+import { playMusic, playSetlist, toggleMute, setMusicVolume } from './music';
+import { loadSettings, saveSettings, Settings, showTitle, hideTitle, setTitleDifficulty, setTitleMode, MODES, tips, openMenu, closeMenu, showResults, hideResults, Fps } from './ui';
+import { BANTER, songLabel, isEncore } from './setlist';
 import { Host, Guest, roomFromUrl, joinLink, interpolated } from './net';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
@@ -18,7 +19,7 @@ const netPanel = document.querySelector<HTMLElement>('#net')!;
 const controls = new Controls();
 const renderer = new Renderer(canvas, overlay);
 let settings: Settings = loadSettings();
-let world: World = createWorld(Date.now(), 1, settings.difficulty);
+let world: World = createWorld(Date.now(), 1, settings.difficulty, settings.mode);
 let started = false;
 let paused = false;
 let slowUntil = 0; // real time until which the fight runs in slow motion
@@ -45,7 +46,7 @@ const guest: Guest | null = room ? new Guest(room) : null;
 let lastLinkStatus = '';
 const localIndex = guest ? 1 : 0;
 
-addEventListener('pointerdown', () => { unlockAudio(); playMusic(started ? 'fight' : 'title'); });
+addEventListener('pointerdown', () => { unlockAudio(); if (started && world.result === 'playing') startMusic(); else if (!started) playMusic('title'); });
 addEventListener('keydown', e => {
   unlockAudio();
   if (e.code === 'KeyM') say(toggleMute() ? 'MUSIC OFF' : 'MUSIC ON', 45);
@@ -55,17 +56,44 @@ addEventListener('keydown', e => {
     const d = e.code === 'Digit1' ? 0 : e.code === 'Digit2' ? 1 : e.code === 'Digit3' ? 2
       : e.code === 'ArrowLeft' ? settings.difficulty - 1 : e.code === 'ArrowRight' ? settings.difficulty + 1 : -9;
     if (d >= 0 && d <= 2) chooseDifficulty(d);
+    if (e.code === 'ArrowUp' || e.code === 'ArrowDown') cycleMode(e.code === 'ArrowUp' ? -1 : 1);
   }
 });
 document.getElementById('title')!.addEventListener('click', e => {
   const d = (e.target as HTMLElement).dataset?.d;
   if (d !== undefined) chooseDifficulty(Number(d));
+  const m = (e.target as HTMLElement).closest<HTMLElement>('[data-m]')?.dataset.m;
+  if (m === 'bar' || m === 'concert') chooseMode(m);
 });
 
 function chooseDifficulty(d: number) {
   applySettings({ ...settings, difficulty: d });
   setTitleDifficulty(d);
-  world = createWorld(Date.now(), 1, d);
+  world = createWorld(Date.now(), 1, d, settings.mode);
+}
+
+// Kilroy's (three rounds) or The Hold Ready at the Salt Shed (endless).
+function chooseMode(mode: Settings['mode']) {
+  applySettings({ ...settings, mode });
+  setTitleMode(mode);
+  world = createWorld(Date.now(), 1, settings.difficulty, mode);
+}
+function cycleMode(by: number) {
+  const i = MODES.findIndex(m => m.mode === settings.mode);
+  chooseMode(MODES[(i + by + MODES.length) % MODES.length].mode);
+}
+
+// The fight's music: the bar's loops, or the band's setlist (which announces each song).
+function announceSong(title: string) {
+  const np = document.getElementById('np')!;
+  np.innerHTML = `NOW PLAYING <b>${title}</b> · The Hold Ready`;
+  np.classList.add('on');
+  clearTimeout(Number(np.dataset.timer));
+  np.dataset.timer = String(setTimeout(() => np.classList.remove('on'), 5000));
+}
+function startMusic() {
+  if (world.mode === 'concert') playSetlist(announceSong);
+  else playMusic(world.wave === T.waves.length - 1 ? 'boss' : 'fight');
 }
 
 function togglePause() {
@@ -107,8 +135,13 @@ function react(events: GameEvent[], w: World) {
     if (guest) { if (player === localIndex) controls.rumble(0, s, wk, ms); }
     else controls.rumble(player, s, wk, ms);
   };
+  // Out at the Salt Shed the voices are uncs and the OG Fan; at Kilroy's, frats and the President.
+  const concert = w.mode === 'concert';
+  const V = concert
+    ? { bottled: VOICE.uncBottled, floored: VOICE.uncFloored, bossDown: VOICE.ogDown, bossBackup: VOICE.ogBackup }
+    : { bottled: VOICE.bottled, floored: VOICE.floored, bossDown: VOICE.bossDown, bossBackup: VOICE.bossBackup };
   const bottled = events.some(e => e.type === 'shatter') && events.some(e => e.type === 'hit');
-  if (bottled) voice(VOICE.bottled, { chance: 0.6 });
+  if (bottled) voice(V.bottled, { chance: 0.6 });
   for (const ev of events) {
     if (ev.type === 'hit' && ev.move === 'stomp') voice(VOICE.stomped, { chance: 0.6 });
     if (ev.type === 'hit' && ev.heavy) {
@@ -116,13 +149,13 @@ function react(events: GameEvent[], w: World) {
       if (ev.by >= 0) voice(ev.by === 0 ? VOICE.conradSwing : VOICE.georgeSwing, { chance: 0.15 });
     }
     if (ev.type === 'counter') voice(VOICE.hurt, { chance: 0.4 });
-    if (ev.type === 'slam') voice(VOICE.floored, { chance: 0.5 });
-    if (ev.type === 'ko') voice(ev.boss ? VOICE.bossDown : VOICE.floored, ev.boss ? { interrupt: true } : { chance: 0.35 });
-    if (ev.type === 'enrage') voice(VOICE.bossBackup, { interrupt: true });
+    if (ev.type === 'slam') voice(V.floored, { chance: 0.5 });
+    if (ev.type === 'ko') voice(ev.boss ? V.bossDown : V.floored, ev.boss ? { interrupt: true } : { chance: 0.35 });
+    if (ev.type === 'enrage') voice(V.bossBackup, { interrupt: true });
     if (ev.type === 'joined' && ev.player === 1) voice(VOICE.georgeJoin, { interrupt: true });
     if (ev.type === 'playerDown' && w.players.length > 1) voice(ev.player === 0 ? VOICE.conradDown : VOICE.georgeDown, { interrupt: true });
-    if (ev.type === 'wave' && ev.n === 0) voice(VOICE.conradStart, { interrupt: true });
-    if (ev.type === 'wave' && ev.n === T.waves.length - 1) voice(VOICE.bossIntro, { interrupt: true });
+    if (ev.type === 'wave' && ev.n === 0 && !concert) voice(VOICE.conradStart, { interrupt: true });
+    if (ev.type === 'wave' && ev.n === T.waves.length - 1 && !concert) voice(VOICE.bossIntro, { interrupt: true });
     if (ev.type === 'hit') { sfx.hit(ev.heavy); if (ev.by >= 0) rumble(ev.by, ev.heavy ? 0.7 : 0.3, 0.5, ev.heavy ? 120 : 60); }
     if (ev.type === 'counter') { sfx.counter(); rumble(ev.by, 1, 0.6, 140); }
     if (ev.type === 'tag') sfx.counter();
@@ -137,11 +170,14 @@ function react(events: GameEvent[], w: World) {
       voice(ev.by === 0 ? VOICE.conradEvade : VOICE.georgeEvade, { chance: 0.6 });
     }
     if (ev.type === 'launch') { sfx.launch(); if (ev.by >= 0) rumble(ev.by, 0.6, 0.8, 120); }
-    if (ev.type === 'spike') { sfx.spike(); rumble(0, 0.9, 0.9, 180); rumble(1, 0.9, 0.9, 180); voice(VOICE.floored, { chance: 0.5 }); }
+    if (ev.type === 'spike') { sfx.spike(); rumble(0, 0.9, 0.9, 180); rumble(1, 0.9, 0.9, 180); voice(V.floored, { chance: 0.5 }); }
     if (ev.type === 'swing' && T.attacks[ev.attack].red) sfx.warn();
-    if (ev.type === 'enrage') say('HE CALLED FOR BACKUP', 90);
-    if (ev.type === 'ko' && ev.boss) say('THE PRESIDENT IS DOWN', 90);
-    if (ev.type === 'ko' && !ev.boss && w.enemies.every(e => e.state === 'dead') && w.wave < T.waves.length - 1) say('ROUND CLEAR', 80);
+    if (ev.type === 'enrage') say(concert ? 'HE CALLED THE MESSAGE BOARD' : 'HE CALLED FOR BACKUP', 90);
+    if (ev.type === 'ko' && ev.boss) say(concert ? "THE OG FAN IS DOWN<small>he'll be back for the next encore</small>" : 'THE PRESIDENT IS DOWN', 90);
+    if (ev.type === 'ko' && !ev.boss && w.enemies.every(e => e.state === 'dead')) {
+      if (concert) say(`SONG OVER<small>water break: +${T.concert.heal} health, and anyone down gets back up</small>`, 110);
+      else if (w.wave < T.waves.length - 1) say('ROUND CLEAR', 80);
+    }
     if (ev.type === 'playerHit') { sfx.hurt(); rumble(ev.player, 1, 1, 200); }
     if (ev.type === 'playerDown' && w.players.length > 1 && w.result === 'playing') say(`${CAST[ev.player].name} IS DOWN<small>stand next to them to help them up</small>`, 120);
     if (ev.type === 'revived') say(`${CAST[ev.player].name} IS BACK UP`, 60);
@@ -150,7 +186,14 @@ function react(events: GameEvent[], w: World) {
     if (ev.type === 'dodge') sfx.dodge();
     if (ev.type === 'shatter') sfx.shatter();
     if (ev.type === 'stage' && ev.stage === 1) say("INSIDE KILROY'S", 90);
-    if (ev.type === 'wave') {
+    if (ev.type === 'wave' && concert) {
+      // Every song: the frontman talks, and it's never the last one.
+      const n = ev.n;
+      if (isEncore(n)) { say(`${songLabel(n)}<small>the OG Fan wants the deep cuts</small>`, 150); voice(VOICE.ogIntro, { interrupt: true }); }
+      else if (n === 0) { say('SONG 1 OF ∞<small>The Hold Ready · live at the Salt Shed, Chicago</small>', 150); voice(VOICE.conradConcert, { interrupt: true }); }
+      else { const i = n % BANTER.length; say(`${songLabel(n)}<small>“${BANTER[i]}”</small>`, 150); voice([VOICE.band[i]], { interrupt: true }); }
+      startMusic();
+    } else if (ev.type === 'wave') {
       const last = ev.n === T.waves.length - 1;
       if (T.waves[ev.n].stage === 0 || !last) say(last ? 'FINAL ROUND' : `ROUND ${ev.n + 1}`, 90);
       else say("FINAL ROUND<small>inside Kilroy's</small>", 120);
@@ -184,11 +227,15 @@ function finisher(events: GameEvent[], w: World) {
 const seen = new Map<number, string>();
 function watch(w: World) {
   if (started) ambient(w.stage === 0 ? 'street' : 'club');
+  // The endless mode keeps count up top.
+  const count = document.getElementById('setcount')!;
+  count.hidden = !(started && w.mode === 'concert' && w.wave >= 0);
+  if (!count.hidden) count.textContent = `${songLabel(w.wave)} OF ∞`;
   for (const e of w.enemies) {
     const was = seen.get(e.id);
     if (was !== e.state) {
-      if (e.state === 'approach' && was === 'circle') voice(VOICE.taunt, { chance: 0.3 });
-      if (e.state === 'windup' && e.kind === 'boss' && e.unblockable) voice(VOICE.bossSwing, { interrupt: true });
+      if (e.state === 'approach' && was === 'circle') voice(w.mode === 'concert' ? VOICE.uncTaunt : VOICE.taunt, { chance: 0.3 });
+      if (e.state === 'windup' && e.kind === 'boss' && e.unblockable) voice(w.mode === 'concert' ? VOICE.ogSwing : VOICE.bossSwing, { interrupt: true });
       seen.set(e.id, e.state);
     }
   }
@@ -203,7 +250,7 @@ function guestTick() {
   if (start && started && world.result === 'playing') togglePause();
   if (g.status !== lastLinkStatus) {
     lastLinkStatus = g.status;
-    if (g.status === 'connected') { started = true; say('CONNECTED<small>you are George · press any button</small>', 120); playMusic('fight'); }
+    if (g.status === 'connected') { started = true; say('CONNECTED<small>you are George · press any button</small>', 120); }
     if (g.status === 'closed') say(`DISCONNECTED<small>${CAST[0].name} closed the game · reload to rejoin</small>`);
     if (g.status === 'error') say(`COULDN'T JOIN ${g.code}<small>${g.error}: check the link, or ask ${CAST[0].name} to host again</small>`);
   }
@@ -211,6 +258,7 @@ function guestTick() {
   if (w) {
     if (w.frame < world.frame - 30) renderer.clear(); // host restarted the fight
     world = w;
+    if (started && w.result === 'playing') startMusic();
     renderer.events(g.events);
     const evs = g.takeEvents();
     react(evs, w);
@@ -226,8 +274,9 @@ function hostTick() {
     // On the title card: left/right on a pad picks difficulty; anything else starts.
     for (const smp of samples.values()) {
       if (Math.abs(smp.input.mx) > 0.6 && !stickHeld) { stickHeld = true; chooseDifficulty(Math.max(0, Math.min(2, settings.difficulty + Math.sign(smp.input.mx)))); }
+      if (Math.abs(smp.input.my) > 0.6 && !stickHeld) { stickHeld = true; cycleMode(Math.sign(smp.input.my)); }
     }
-    if (![...samples.values()].some(smp => Math.abs(smp.input.mx) > 0.3)) stickHeld = false;
+    if (![...samples.values()].some(smp => Math.abs(smp.input.mx) > 0.3 || Math.abs(smp.input.my) > 0.3)) stickHeld = false;
     const dev = controls.joiner(samples);
     if (controls.onlinePressed(samples)) { startHosting(); begin(dev ?? 'kb1'); return; }
     if (dev) begin(dev);
@@ -280,14 +329,14 @@ function begin(dev: Parameters<typeof controls.slots.push>[0]) {
   unlockAudio();
   hideTitle();
   say('');
-  playMusic('fight');
+  startMusic();
 }
 
 function restart() {
   const online = host?.status === 'connected';
-  world = createWorld(Date.now(), online ? 2 : Math.max(1, controls.slots.length), settings.difficulty);
+  world = createWorld(Date.now(), online ? 2 : Math.max(1, controls.slots.length), settings.difficulty, settings.mode);
   renderer.clear();
-  playMusic('fight');
+  startMusic();
   lastResult = '';
   hideResults();
   say('');

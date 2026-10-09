@@ -90,7 +90,38 @@ export const INSIDE: Level = {
   ],
 };
 
-export const LEVELS: Level[] = [LEVEL, INSIDE];
+// The Salt Shed, 1357 N Elston Ave, Chicago: the old Morton Salt warehouse, now a 3,600-capacity
+// concert hall under a huge timber A-frame. The fight is on the general-admission floor: the
+// stage and its crowd barricade along the back (the far edge), the bar down the west wall, the
+// sound desk out on the floor, delay towers by the stage and a few high-tops. The rest of the
+// crowd packs the east side; the grandstand that faces the stage is behind the camera.
+export const CONCERT: Level = {
+  bounds: { minX: -9, maxX: 9, minY: -4.4, maxY: 4.2 },
+  playerStart: { x: 0, y: 1.0 },
+  obstacles: [
+    { x: -8.45, y: 0.6, w: 0.9, h: 5.6, kind: 'bar' }, // the bar, along the west wall
+    { x: 4.4, y: 2.3, w: 2.4, h: 1.4, kind: 'booth' }, // front-of-house sound desk
+    { x: -7.3, y: -4.15, w: 0.6, h: 0.6, kind: 'post' }, // delay towers either side of the stage
+    { x: 7.3, y: -4.15, w: 0.6, h: 0.6, kind: 'post' },
+    { x: -5.4, y: -1.2, w: 0.7, h: 0.7, kind: 'post' }, // high-tops
+    { x: -5.4, y: 2.4, w: 0.7, h: 0.7, kind: 'post' },
+    { x: 6.4, y: -1.4, w: 0.7, h: 0.7, kind: 'post' },
+  ],
+  nav: [
+    { x: 2.8, y: 1.2 }, { x: 6.0, y: 1.2 }, { x: 2.8, y: 3.4 }, { x: 6.0, y: 3.4 },
+    { x: -7.5, y: -2.6 }, { x: -7.5, y: 3.8 },
+  ],
+  bottleSpots: [{ x: -8.45, y: -1.0 }, { x: -8.45, y: 2.4 }],
+  spawns: [
+    { from: { x: -10.5, y: -3.4 }, to: { x: -6.4, y: -3.0 } }, // out of the crowd at the barricade, stage left
+    { from: { x: 10.5, y: -2.6 }, to: { x: 6.6, y: -3.0 } }, // out of the crowd, stage right
+    { from: { x: -1.5, y: 5.6 }, to: { x: -1.5, y: 3.4 } }, // down from the grandstand
+    { from: { x: 10.5, y: 0.8 }, to: { x: 7.4, y: 0.4 } },
+  ],
+};
+
+export const LEVELS: Level[] = [LEVEL, INSIDE, CONCERT];
+export const CONCERT_STAGE = 2;
 
 // The stage the simulation is currently stepping. step() sets it from the world before any
 // movement, so every geometry query below answers for that world's stage.

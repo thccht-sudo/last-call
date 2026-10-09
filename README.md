@@ -80,8 +80,30 @@ the big ones are always FIJI. Three rounds:
    President: hook, elbow, then a red haymaker (a red charge once he's enraged), super armour,
    and backup at half health.
 
+### The Hold Ready (endless)
+
+Pick **THE HOLD READY** on the title card (↑ ↓, the stick, or click) for the second mode: an
+endless fight on the general-admission floor of the Salt Shed in Chicago (the old Morton Salt
+warehouse under its timber A-frame) while The Hold Ready, a bar-band parody, play a show that
+never ends. Every wave is a song (SONG 7 OF ∞ on the LED wall); between songs the frontman
+talks, everyone standing gets a water (+25 health) and anyone down gets back up. Songs grow by a
+man every other song (up to nine), more of them swing at once, and they get sturdier and hit a
+little harder as the night goes on. Every fifth song is an encore led by the OG Fan (412 shows,
+super armour, calls in the message-board guys at half health). It ends only when you're both
+down; the results screen counts the songs you lasted and the title card keeps your best.
+
+The opposition is chopped uncs: 45-year-olds dressed like it's 2004. Cargo shorts with white
+socks pulled up and dad sneakers, tucked-in polos and oxfords with braided belts, old tour
+shirts, flame shirts on the big ones, fanny packs, trucker caps, frosted tips, horseshoe hair,
+mullets, goatees, wraparound shades pushed up on the head and the odd Bluetooth earpiece. Same
+moves as the frats (hooks, kicks, cup throwers, dad-dancing spin kicks, heavies), new voices.
+The setlist (Stay Ready, Endless Nights, One More Song) is shout-along bar-band rock with
+piano and organ, played through in order, round and round; the composition of every song's
+wave is fixed, so scores compare fairly. Tuning lives in `TUNING.concert`; the venue layout in
+`CONCERT` in `src/sim/level.ts` and its look (stage, band, lights, crowd) in `src/scene/saltshed.ts`.
+
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
-through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
+through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state, plus The Hold Ready's three songs (vocals and lyrics by Lyria from our prompts in the same script). M mutes.
 
 Characters: modelled in Blender by `tools/build-characters.py` (run with the `bpy` module,
 Blender 4.2: `pip install bpy==4.2.0` on Python 3.11, then `python tools/build-characters.py
