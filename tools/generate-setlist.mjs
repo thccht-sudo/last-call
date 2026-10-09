@@ -1,29 +1,38 @@
 // The Hold Ready's setlist for the endless mode: a parody of a wordy, piano-and-twin-guitar
-// American bar band whose singer talks his way through long stories and whose crowd shouts
-// the choruses back. Each song is generated with Lyria 3 through OpenRouter, then an
-// audio-capable model listens to it three times (tools/judge-music.mjs) and scores how well it
-// passes for the band; off-style takes are regenerated and the best take is kept.
-// Usage: OPENROUTER_API_KEY=... node tools/generate-setlist.mjs [set1 set2 ...]
-// Writes public/music/<name>.mp3 and prints each take's scores. Not part of the build.
+// American bar band whose frontman doesn't really sing: he just talks over the music, telling
+// long stories, while the band and crowd shout the choruses back. Each song is generated with
+// Lyria 3 through OpenRouter from the prompt that made the one take a listener approved.
+// Usage: OPENROUTER_API_KEY=... node tools/generate-setlist.mjs [set2 set3 ...]
+// Writes public/music/<name>.mp3 and prints each take's verdicts. Not part of the build.
 // Lyria refuses prompts that name real artists, so the style is described, never named.
+//
+// What we learned checking takes: no automatic check could hear the difference that matters.
+// An audio model's absolute "does this sound like the band" score rated takes the listener
+// rejected 10/10; comparing against the approved take (tools/match-vocal.mjs, used below) turns
+// away obvious singing but also passed a rejected take; the share of held notes in the
+// separated vocal didn't separate them either. So the check here is only a coarse filter:
+// every take that goes into the game is picked by ear.
 import { mkdirSync, copyFileSync, rmSync, existsSync } from 'node:fs';
 import { lyria } from './lyria.mjs';
-import { judge } from './judge-music.mjs';
+import { matchVocal } from './match-vocal.mjs';
 
-const BAND = 'Loud, loose 2000s indie bar-band rock recorded live in a sweaty club, heartland rock meets 70s twin-guitar hard rock: ' +
-  'two crunchy overdriven Les Paul guitars trading big classic-rock riffs and twin-harmony leads, pounding boogie-woogie barroom piano ' +
-  'and a wheezing Hammond organ high in the mix, driving straight-ahead rock drums, simple bass. No horns, no synths, no country twang, no pop-punk.';
-const VOX = 'The lead vocal is talk-sung, not sung: a plain, slightly nasal, untrained Midwestern guy in his thirties half-speaking, ' +
-  'half-shouting a long wordy story in a rhythmic rant over the band, cramming lots of words into every line, conversational, like a guy ' +
-  'telling a story at the end of the bar. No vibrato, no growl, no melisma. Only the choruses are shouted by the whole band as a ' +
-  'gang-vocal singalong with whoa-ohs.';
+// The approved take ("Stay Ready", set1) came from exactly this prompt, after rounds of
+// listening: "beat poet vocals" got closest, the thin nasal voice description kept him from
+// sounding like a gravelly rock singer, and the unhurried, conversational pacing is what
+// stopped him singing. TALK adds the listener's own description of the target.
+const CORE = 'Beat poet vocals over indie rock: the frontman does not sing the verses, he tells the story out loud like a guy at the end of the bar, in rhythm with the band.';
+const PACE = 'He is unhurried and conversational, almost casual at first, words landing a little behind the beat, then gets more and more worked up until he is shouting by the chorus.';
+const TALK = 'He basically just talks in his ordinary speaking voice, like a singer who stops singing and simply talks to the crowd over the music.';
+const TIMBRE = 'His voice is thin, nasal, reedy and a little hoarse, a nerdy excitable everyman with a flat Minnesota accent: not gravelly, not raspy, not deep, not a rock-star voice, not a trained singer.';
+const BAND = 'Loud, loose 2000s indie rock bar band recorded live in a sweaty club: two crunchy overdriven guitars with big classic-rock riffs, ' +
+  'pounding barroom piano and Hammond organ, driving drums, the whole band shouting the choruses. No horns, no synths, no country.';
 
-const V = '[Verse: spoken, talk-sung]', C = '[Chorus: gang vocals, shouted]', B = '[Bridge: spoken, talk-sung]';
+const V = '[Verse: spoken word]', C = '[Chorus: gang vocals, shouted]', B = '[Bridge: spoken word]';
 
 // Titles must match TRACKS in src/setlist.ts. Recurring cast, as the band likes: Kevin from the
 // message board (412 shows), Denise who works the merch table, Big Dave in the Oakleys.
 export const SONGS = {
-  set1: { title: 'Stay Ready', feel: '140 BPM anthem that opens on a big guitar riff', lyrics: `${V}
+  set1: { title: 'Stay Ready', bpm: 132, lyrics: `${V}
 We pulled in off the Kennedy at seven with the van still smoking
 Kevin from the message board was waiting at the loading dock and he was not joking
 He said he's seen us four hundred and twelve times, he's got every setlist in a binder
@@ -40,7 +49,7 @@ ${C}
 Stay ready! Whoa-oh! Stay ready! Whoa-oh!
 The night's not over till we say so` },
 
-  set2: { title: 'Endless Nights', feel: '136 BPM driving rocker on a big guitar riff, with a barroom piano hook', lyrics: `${V}
+  set2: { title: 'Endless Nights', bpm: 136, lyrics: `${V}
 It was one of those endless nights under the Salt Shed lights, the doors said seven-thirty and it's two a.m. tonight
 Denise at the merch table sold out of the larges and the mediums and the hoodies and the pins
 She said the guy in cargo shorts keeps asking if we're gonna play the old one, I said honey we just did, and we'll play it again
@@ -55,7 +64,7 @@ ${C}
 Whoa-oh, endless nights! We never say goodnight
 Whoa-oh, endless nights! Leave on the house lights` },
 
-  set3: { title: 'One More Song', feel: '150 BPM fast riff-driven rocker that ends on a chanted crowd outro', lyrics: `${V}
+  set3: { title: 'One More Song', bpm: 140, lyrics: `${V}
 We said thank you and goodnight at a quarter after twelve and we got halfway to the van
 Then the drummer heard the crowd still chanting from the parking lot and the drummer is a sentimental man
 So we came back out in our coats and the roadies started crying and the merch guy's out of black
@@ -74,7 +83,7 @@ One more song! Whoa-oh! We play until the dawn!
 [Outro: chanted by the crowd]
 One more! One more! One more! One more!` },
 
-  set4: { title: 'Kevin from the Message Board', feel: '150 BPM driving rocker with a twin-guitar harmony lead', lyrics: `${V}
+  set4: { title: 'Kevin from the Message Board', bpm: 138, lyrics: `${V}
 Kevin from the message board has a ponytail and a lanyard and a laminated pass that doesn't work
 He's got a spreadsheet of the setlists going back to two thousand four and he color codes the encores, he's kind of a jerk
 He told me that the bridge on the second record is the most important bridge in Minnesota rock
@@ -90,7 +99,7 @@ ${C}
 Kevin! Whoa-oh! He was there the first night!
 Kevin! Whoa-oh! He'll be there the last night!` },
 
-  set5: { title: 'Cargo Shorts Kids', feel: '135 BPM swaggering mid-tempo rocker on a chunky guitar riff', lyrics: `${V}
+  set5: { title: 'Cargo Shorts Kids', bpm: 135, lyrics: `${V}
 They used to be the kids in the basement shows in Uptown with the bleach in their hair
 Now they're forty-five with fanny packs and frosted tips and a Bluetooth in their ear that nobody calls
 They park the minivan on Elston and they tell you that they saw us at the Metro when the floor was sticky and the drinks were cheap
@@ -107,7 +116,7 @@ ${C}
 Cargo shorts kids! Whoa-oh! They never left the scene!
 Cargo shorts kids! Whoa-oh! Forty-five and seventeen!` },
 
-  set6: { title: 'Baptized in the Chicago River', feel: '120 BPM slow-building anthem that opens on Hammond organ and swells to a huge final chorus', lyrics: `${V}
+  set6: { title: 'Baptized in the Chicago River', bpm: 120, lyrics: `${V}
 She got baptized in the Chicago River on Saint Patrick's Day when it was green
 She said it doesn't count, I said it counts if you believe it, and you've got to believe in something if you're gonna be seen
 She had a rosary from her grandma and a ticket stub from a show that ran six hours long
@@ -123,7 +132,7 @@ ${C}
 Whoa-oh, come up singing! Whoa-oh, come up clean!
 Get yourself baptized in the river when the river's green!` },
 
-  set7: { title: 'Curfew Is a Rumor', feel: '144 BPM driving riff rocker with pounding piano under the guitars', lyrics: `${V}
+  set7: { title: 'Curfew Is a Rumor', bpm: 136, lyrics: `${V}
 The promoter came backstage at ten fifty-nine with a clipboard and a lanyard and a frown
 He said the city has a curfew and the neighbors on Elston have a curfew and the cops are coming down
 I said a curfew is a rumor that the parents tell the kids to get them home before it's late
@@ -140,7 +149,7 @@ ${C}
 Curfew is a rumor! Whoa-oh! Nobody here believes it!
 Curfew is a rumor! Whoa-oh! If you're tired you can leave it!` },
 
-  set8: { title: 'Denise Works the Merch', feel: '140 BPM riff-driven rocker with pounding piano under the guitars', lyrics: `${V}
+  set8: { title: 'Denise Works the Merch', bpm: 140, lyrics: `${V}
 Denise works the merch, she's got a cash box and a card reader and a marker behind her ear
 She's sold a thousand tour shirts and she's sold them all to Kevin, he buys one every year
 She knows the setlist better than the band does, she knows when to take a break
@@ -157,7 +166,7 @@ ${C}
 Denise! Denise! Whoa-oh! She knows how it ends!
 Denise! Denise! Whoa-oh! It never ends!` },
 
-  set9: { title: 'Blue Line at Sunrise', feel: '118 BPM heartfelt mid-tempo anthem, piano and organ up front, a big twin-guitar solo', lyrics: `${V}
+  set9: { title: 'Blue Line at Sunrise', bpm: 118, lyrics: `${V}
 We came out on Elston when the Blue Line started running and the sky was the color of a bruise
 The bass player's wife called twice, the drummer's on his ninth pair of shoes
 And the kids we used to be were on the platform with their headphones in, heading home to sleep
@@ -173,7 +182,7 @@ ${C}
 Whoa-oh, Blue Line at sunrise! Whoa-oh, we're still not done!
 Whoa-oh, Blue Line at sunrise! Turn around, there's one more song!` },
 
-  set10: { title: 'Four Hundred and Twelve', feel: '138 BPM big riff-driven rocker that builds to a shouted climax', lyrics: `${V}
+  set10: { title: 'Four Hundred and Twelve', bpm: 138, lyrics: `${V}
 The OG Fan is standing in the second row with a laminate from two thousand five
 He's got a tattoo of our first van on his calf and the van is still alive
 He's seen four hundred and twelve shows and he remembers every encore, every spill, every fight
@@ -191,25 +200,19 @@ Four hundred and twelve! Whoa-oh! He's never missed a show!
 Four hundred and thirteen! Whoa-oh! He's never gonna go!` },
 };
 
-export const promptFor = s => `${BAND} ${VOX} ${s.feel}, a song called "${s.title}". Lyrics:\n${s.lyrics}`;
+export const promptFor = s => `${CORE} ${PACE} ${TALK} ${TIMBRE} ${BAND} A song called "${s.title}", ${s.bpm} BPM. Lyrics:\n${s.lyrics}`;
 
-// Riff-driven feels pass far more often than piano-led ones, which drift toward country or
-// pop-punk; the piano still comes through from BAND.
-// Good enough to keep: it has to sound like the band, the singer has to talk, not croon, and the
-// piano or organ has to be there.
-const PASS = j => j.hold_steady >= 8 && j.talk_sing >= 7 && j.guitars >= 6 && j.keys >= 5;
-const score = j => j.hold_steady * 2 + j.talk_sing + j.keys * 0.5 + j.guitars * 0.5;
+export const REFERENCE = 'public/music/set1.mp3';
+// Kept when he talks like the reference: two of three listens agree, and the voice is close.
+const PASS = j => j.talks >= 7 && j.voice >= 6 && j.sings <= 1;
+const score = j => j.talks * 2 + j.voice - j.sings * 3;
 const TRIES = 6;
-// One listen is noisy (the same take can score 10 and then 4), so each take is judged three
-// times and kept on the median of every score.
+// One listen is noisy, so each take is compared three times and kept on the medians.
 async function listen(file) {
-  const runs = (await Promise.allSettled([judge(file), judge(file), judge(file)])).filter(r => r.status === 'fulfilled').map(r => r.value);
+  const runs = (await Promise.allSettled([1, 2, 3].map(() => matchVocal(REFERENCE, file)))).filter(r => r.status === 'fulfilled').map(r => r.value);
   if (!runs.length) throw new Error('judge failed');
   const median = k => { const v = runs.map(r => Number(r[k]) || 0).sort((a, b) => a - b); return v[Math.floor((v.length - 1) / 2)]; };
-  const out = { ...runs[0] };
-  for (const k of ['talk_sing', 'guitars', 'keys', 'singalong', 'production', 'hold_steady']) out[k] = median(k);
-  out.listens = runs.map(r => r.hold_steady);
-  return out;
+  return { talks: median('talks_like_reference'), voice: median('voice_like_reference'), sings: runs.filter(r => r.sings_in_verses).length, listens: runs.map(r => r.talks_like_reference), notes: runs[0].notes };
 }
 
 async function make(name) {
@@ -221,7 +224,7 @@ async function make(name) {
   if (existsSync(current)) {
     try {
       best = { take: current, j: await listen(current) };
-      console.log(`${name} current: hold_steady ${best.j.hold_steady} (${best.j.listens}) talk_sing ${best.j.talk_sing}`);
+      console.log(`${name} current: talks ${best.j.talks} (${best.j.listens}) voice ${best.j.voice} sings ${best.j.sings}/3`);
     } catch { /* judge unavailable: the first new take to pass replaces it */ }
     if (best && PASS(best.j)) { console.log(`${name}: current take already passes`); return; }
   }
@@ -234,7 +237,7 @@ async function make(name) {
         catch (e) { if (attempt >= 4) throw e; await new Promise(r => setTimeout(r, 15000 * attempt)); }
       }
       const j = await listen(take);
-      console.log(`${name} take ${t}: hold_steady ${j.hold_steady} (${j.listens}) talk_sing ${j.talk_sing} guitars ${j.guitars} keys ${j.keys} · ${j.genre} · ${j.vocal}`);
+      console.log(`${name} take ${t}: talks ${j.talks} (${j.listens}) voice ${j.voice} sings ${j.sings}/3 · ${j.notes}`);
       if (!best || score(j) > score(best.j)) best = { take, j };
       if (PASS(j)) break;
     } catch (e) { console.log(`${name} take ${t}: failed ${String(e.message ?? e).slice(0, 200)}`); }
@@ -246,7 +249,8 @@ async function make(name) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SONGS);
+  // set1 is the reference itself, so it's never regenerated from here.
+  const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SONGS).filter(n => n !== 'set1');
   // One at a time: in parallel Lyria starts returning songs with no audio.
   for (const name of names) await make(name);
 }

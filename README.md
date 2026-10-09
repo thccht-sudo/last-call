@@ -99,11 +99,12 @@ mullets, goatees, wraparound shades pushed up on the head and the odd Bluetooth 
 moves as the frats (hooks, kicks, cup throwers, dad-dancing spin kicks, heavies), new voices.
 The setlist is ten songs (about half an hour) of shout-along bar-band rock, played through in
 order, round and round: crunchy twin guitars, barroom piano and organ, gang-vocal choruses, and
-a singer who talks his way through long stories about Kevin from the message board, Denise at
-the merch table, uncs in cargo shorts and a curfew that's only a rumor. `tools/generate-setlist.mjs`
-makes each one with Lyria 3, then has an audio model listen to it (`tools/judge-music.mjs`)
-and score how well it passes for the band (talk-sung vocal, guitars, keys, singalong);
-off-style takes are regenerated and the best is kept. The composition of every song's
+a frontman who doesn't sing the verses, he just talks over the band, telling long stories
+about Kevin from the message board, Denise at the merch table, uncs in cargo shorts and a
+curfew that's only a rumor. `tools/generate-setlist.mjs` makes each song with Lyria 3 from
+the prompt behind the one take a listener approved by ear ("Stay Ready"), with a rough
+automatic check against it (`tools/match-vocal.mjs`); takes go in the game only when picked
+by ear, because no automatic check reliably heard the difference. The composition of every song's
 wave is fixed, so scores compare fairly. Tuning lives in `TUNING.concert`; the venue layout in
 `CONCERT` in `src/sim/level.ts` and its look (stage, band, lights, crowd) in `src/scene/saltshed.ts`.
 
