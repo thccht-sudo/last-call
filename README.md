@@ -10,9 +10,9 @@ Play: https://thccht-sudo.github.io/last-call/
 The title card shows the controls and picks Easy, Normal or Hard (enemy damage, counter window,
 enemy health). Esc or Start pauses: restart, music / sounds / voices volume, difficulty,
 graphics (auto drops shadows, then resolution, if the frame rate sags) and a frame-rate readout
-(F). First-time tips explain counters, dodges, cups, grabs, bottles and revives as they come up.
-After each fight a results screen shows per-player damage, knockouts, counters landed and
-missed, slams, and what hurt you most. The last knockout of each round plays in slow motion.
+(F). First-time tips explain counters, dodges, combos, cups, bottles and revives as they come up.
+After each fight a results screen shows per-player damage, knockouts, best combo, launches,
+counters landed and missed, slams, and what hurt you most. The last knockout of each round plays in slow motion.
 
 Player 1 is Conrad, player 2 is George.
 
@@ -33,17 +33,40 @@ hit is a TAG TEAM hit for 1.5x damage, and you can counter a swing aimed at your
 | Attack (locks onto the enemy you push toward) | X | J | Numpad 1 or , |
 | Counter (yellow prompt) | Y | K | Numpad 2 or . |
 | Dodge (red prompt: heavies can't be countered) | A | Space | Numpad 0 or / |
-| Grab / throw bottle | B | E | Numpad 3 or ' |
+| Pick up / throw bottle | B | E | Numpad 3 or ' |
 | Start / restart | Start | Enter | Numpad Enter |
+
+### Fighting
+
+Attacks lock onto the enemy you push toward (or keep hitting the one you're on if you let go
+of the stick) and close the gap: anyone within about 6 m gets a sprint-in strike, so a press
+never falls short. Counter (Y) and dodge (A) cancel an attack at any point, and you can dodge
+out of a hit stagger after a split second, so nothing locks you out for long.
+
+| Combo | Input | What it does |
+|---|---|---|
+| Jab, cross, roundhouse | X X X | Third hit knocks him flying; near a table, fence, wall or the bar it steers him into it for a SLAM |
+| Sweep | X X, pull the stick away, X | Drops him at your feet |
+| Uppercut launcher | X X, wait a beat, X | Launches him into the air |
+| Juggle and spike | X X X while he's in the air | Two punches keep him up, the third spikes him into the floor and the shockwave floors anyone close |
+| Riposte | Y (counter) then X | Counters stagger every yellow swing in range at once; the riposte launches him |
+| Flying knee | A (dodge) then X | Reaches further than a normal lunge, knocks down |
+| Stomp | X next to a man on the floor | Extra damage, keeps him down a little longer |
+| Bottle | B to pick up, B to throw, or X to smash it over a head | |
+
+Enemy attacks glow **yellow** (counter with Y) or **red** (can't be countered: dodge with A;
+a red lunge is heard as a warning sting, so roll to the side and let it fly past). Nothing
+grabs or holds you.
 
 The opposition wears IU fraternity shirts (FIJI, ATO, Beta, Sigma Chi, Phi Delt, Kappa Sig);
 the big ones are always FIJI. Three rounds:
 
-1. Three brawlers. Learn to counter (yellow prompt) and chain the three-hit string.
-2. Brawlers plus a cup thrower (counter a flying red cup to send it back) and a grappler (red
-   prompt: dodge; if he catches you, mash any button, or have your partner hit him).
-3. Inside Kilroy's, the FIJI President: two counterable swings then an unblockable haymaker, super armour, and
-   backup at half health. Knock anyone into a table, the fence or a wall for a SLAM.
+1. Three brawlers: hooks, front kicks and shoves, all yellow. Learn to counter and chain the string.
+2. Brawlers plus a cup thrower (counter a flying red cup to send it back) and a kicker: quick
+   yellow elbows and spinning kicks, and a red flying knee from range.
+3. Inside Kilroy's: a heavy (red haymakers and a red shoulder charge), a thrower, and the FIJI
+   President: hook, elbow, then a red haymaker (a red charge once he's enraged), super armour,
+   and backup at half health.
 
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
 through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
@@ -51,13 +74,20 @@ through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mu
 Animation: jointed mannequins posed from motion capture. Punches, the kick, the overhead smash,
 walks and the frat swagger are real mocap from the Bandai Namco Research Motion Dataset,
 retimed onto each move's frame data by `src/anim/moves.ts`, so tuning a move's startup, active
-or recovery frames retimes its animation too. Rolls, hit reactions, knockdowns and grabs are
-procedural poses built with IK. `npm run dev` then open `/strip.html?move=jab` (or kick,
-dodge, haymaker, grapple, knockdown...) to see any move as a row of stills.
+or recovery frames retimes its animation too. The lunge's sprint-in is the mocap dash, and
+the spike is a mocap two-handed swing. Uppercuts, sweeps, knees, stomps, elbows, shoves, the
+charge, rolls, hit reactions, juggles and knockdowns are procedural poses built with IK on top
+of the mocap guard. `npm run dev` then open `/strip.html?move=jab` (any player move by its
+name in `src/sim/tuning.ts`, `e-` plus any enemy attack such as `e-flyingKnee`, or dodge,
+counter, air, knockdown; `&lead=8` adds sprint-in frames) to see a move as a row of stills,
+or `/strip.html?clip=dash&from=0&to=27` for raw baked frames.
 `tools/bake-mocap.mjs` re-bakes the clips listed in `tools/mocap-clips.txt`.
 
-Physics: the fight runs on a flat, deterministic 60 Hz simulation (circles, knockback, slams
-into obstacles). On top of that, purely for looks, `src/physics.ts` turns anyone knocked down
+Physics: the fight runs on a deterministic 60 Hz simulation (circles on a flat floor plus a
+height for launched enemies, knockback, juggle gravity, slams into obstacles). Hits use frame
+data: the locked target is hit anywhere within 2.1 m on the active frames, anyone else only
+inside the move's reach and a cone in front; hitstop freezes the fight for 5 to 12 frames by
+weight of hit. On top of that, purely for looks, `src/physics.ts` turns anyone knocked down
 into a Verlet ragdoll launched along the hit (harder hits fly higher) that tumbles, drapes and
 slumps against tables, the fence and the bar, and scatters loose props: stools, cans, cups, a
 trash can and a traffic cone. Each browser runs its own copy, so it never affects the fight.

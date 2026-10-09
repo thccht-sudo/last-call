@@ -35,6 +35,8 @@ export function showTitle(s: Settings, guest: boolean) {
       </table>
       <ul>
         <li>Push toward an enemy and attack to lunge at him. Three hits knock him down.</li>
+        <li>Third hit: pull back to sweep, or wait a beat to launch him, then juggle.</li>
+        <li>Counter then attack: riposte. Dodge then attack: flying knee.</li>
         <li><b class="y">Yellow</b> over a head: counter. <b class="r">Red</b>: dodge, don't counter.</li>
         <li>Counter a flying red cup to send it back.</li>
         <li>Knock them into tables, the fence or the bar for a SLAM.</li>
@@ -72,8 +74,18 @@ export function tips(w: World, pad: boolean) {
     tip('dodge', `<span class="dot r"></span> Red means you can't counter it: ${k('A', 'Space')} to dodge out of the way`, now);
   if (w.cups.some(c => w.players.some(p => deflectable(p, c))))
     tip('cup', `Incoming cup: ${k('Y', 'K')} knocks it back at him`, now);
-  if (w.players.some(p => p.state === 'grabbed'))
-    tip('grab', 'Grabbed! Mash any button to break free', now);
+  if (w.enemies.some(e => e.unblockable && e.state === 'windup' && T.attacks[e.attack].lunge > 0))
+    tip('lunge', `<span class="dot r"></span> He's about to lunge: ${k('A', 'Space')} to the side so he flies past`, now);
+  if (w.players.some(p => p.combo === 2 && p.state === 'attack'))
+    tip('finish', `Third hit: ${k('X', 'J')} kicks him away · pull back + ${k('X', 'J')} sweeps · wait a beat, then ${k('X', 'J')} launches`, now);
+  if (w.enemies.some(e => e.state === 'air'))
+    tip('juggle', `He's in the air: ${k('X', 'J')} ${k('X', 'J')} ${k('X', 'J')} to juggle and spike him`, now);
+  if (w.players.some(p => p.state === 'counter' && p.t < 4) && shownTips.has('counter'))
+    tip('riposte', `Countered: hit ${k('X', 'J')} right away for a riposte that launches`, now);
+  if (w.players.some(p => p.state === 'dodge') && shownTips.has('dodge'))
+    tip('knee', `Dodge then ${k('X', 'J')}: a flying knee that reaches further`, now);
+  if (w.enemies.some(e => e.state === 'down' && e.t > 20 && w.players.some(p => Math.hypot(p.pos.x - e.pos.x, p.pos.y - e.pos.y) < 2)))
+    tip('stomp', `${k('X', 'J')} on a man who's down to stomp him`, now);
   if (w.players.some(p => p.state === 'down') && w.players.length > 1)
     tip('revive', 'Stand next to your partner to get them back up', now);
   if (w.bottles.some(b => b.state === 'ground' && w.players.some(p => Math.hypot(p.pos.x - b.pos.x, p.pos.y - b.pos.y) < 1.8)))
@@ -135,6 +147,8 @@ export function showResults(w: World) {
         <dt>Cups returned</dt><dd>${s.deflects}</dd>
         <dt>Slams</dt><dd>${s.slams}</dd>
         <dt>Damage taken</dt><dd>${s.taken}</dd>
+        <dt>Best combo</dt><dd>${s.bestCombo}</dd>
+        <dt>Launches</dt><dd>${s.launches}</dd>
         <dt>Counters missed</dt><dd>${s.missedCounters}</dd>
         <dt>Counter whiffs</dt><dd>${s.whiffs}</dd>
         <dt>Times down</dt><dd>${s.downs}</dd>

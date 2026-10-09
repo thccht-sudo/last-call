@@ -83,6 +83,21 @@ function thump(freq: number, dur: number, gain: number) {
   o.start(); o.stop(t + dur);
 }
 
+// A short square-wave sting: the red-attack warning, so a dodge can be heard coming.
+function sting(freqs: number[], gain: number) {
+  if (!running() || !sfxBus) return;
+  const t = ctx!.currentTime;
+  freqs.forEach((f, i) => {
+    const o = ctx!.createOscillator(), g = ctx!.createGain();
+    o.type = 'square'; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t + i * 0.07);
+    g.gain.linearRampToValueAtTime(gain, t + i * 0.07 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.09);
+    o.connect(g).connect(sfxBus!);
+    o.start(t + i * 0.07); o.stop(t + i * 0.07 + 0.1);
+  });
+}
+
 const punch = (heavy: boolean) => sample(`punch${Math.floor(Math.random() * 6)}`, heavy ? 0.9 : 0.6, vary(0.12) * (heavy ? 0.85 : 1.05));
 
 export const sfx = {
@@ -90,6 +105,9 @@ export const sfx = {
   counter() { punch(true); noise(0.18, 4500, 0.35); thump(70, 0.28, 0.8); },
   hurt() { punch(false); noise(0.12, 900, 0.4); thump(60, 0.18, 0.7); },
   whiff() { noise(0.12, 600, 0.25); },
+  warn() { sting([660, 990], 0.07); },
+  launch() { punch(true); noise(0.22, 1800, 0.3); thump(120, 0.25, 0.6); },
+  spike() { punch(true); noise(0.3, 1400, 0.45); thump(50, 0.4, 1); },
   dodge() { noise(0.08, 1200, 0.15); },
   shatter() { sample(`glass${Math.floor(Math.random() * 4)}`, 0.7, vary(0.1)) ?? noise(0.3, 7000, 0.35); },
 };

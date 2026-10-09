@@ -125,7 +125,9 @@ function react(events: GameEvent[], w: World) {
     if (ev.type === 'slam') { sfx.hit(true); rumble(0, 0.8, 0.8, 150); rumble(1, 0.8, 0.8, 150); }
     if (ev.type === 'deflect') { sfx.counter(); rumble(ev.by, 0.6, 0.6, 100); }
     if (ev.type === 'throw') sfx.whiff();
-    if (ev.type === 'grabbed') { sfx.hurt(); rumble(ev.player, 0.5, 1, 300); }
+    if (ev.type === 'launch') { sfx.launch(); if (ev.by >= 0) rumble(ev.by, 0.6, 0.8, 120); }
+    if (ev.type === 'spike') { sfx.spike(); rumble(0, 0.9, 0.9, 180); rumble(1, 0.9, 0.9, 180); voice(VOICE.floored, { chance: 0.5 }); }
+    if (ev.type === 'swing' && T.attacks[ev.attack].red) sfx.warn();
     if (ev.type === 'enrage') say('HE CALLED FOR BACKUP', 90);
     if (ev.type === 'ko' && ev.boss) say('THE PRESIDENT IS DOWN', 90);
     if (ev.type === 'playerHit') { sfx.hurt(); rumble(ev.player, 1, 1, 200); }
@@ -305,10 +307,11 @@ function frame(now: number) {
     bar.classList.toggle('waiting', !p);
     bar.querySelector<HTMLElement>('i')!.style.width = p ? `${(p.hp / T.player.hp) * 100}%` : '0%';
     const waiting = host ? (host.status === 'connected' ? '' : 'waiting for the online link') : 'press any button to join · O to play online';
-    bar.querySelector('small')!.textContent = !started ? '' : !p ? waiting : p.state === 'down' ? 'DOWN' : '';
+    const combo = p && p.hits >= 3 && world.frame - p.lastHitAt < 90 ? `${p.hits} HITS` : '';
+    bar.querySelector('small')!.textContent = !started ? '' : !p ? waiting : p.state === 'down' ? 'DOWN' : combo;
   });
   hint.textContent = controls.isPad(0)
-    ? 'X attack · Y counter · A dodge · B grab / throw'
+    ? 'X attack · Y counter · A dodge · B bottle'
     : guest
       ? 'WASD or arrows to move · J attack · K counter · Space dodge · E bottle'
       : 'P1: WASD · J attack · K counter · Space dodge · E bottle  |  P2: arrows · numpad 1 attack · 2 counter · 0 dodge · 3 bottle';

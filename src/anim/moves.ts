@@ -19,6 +19,8 @@ const KEYS = {
   kick: argmax(CLIPS.kick, p => z(p, J.FootR) + y(p, J.FootR)),
   // The slash raises both hands overhead, then chops down: contact is the low point after the peak.
   slash: (() => { const top = argmax(CLIPS.slash, p => y(p, J.HandR)); return argmax(CLIPS.slash, p => -y(p, J.HandR), top, Math.min(CLIPS.slash.frames.length, top + 25)); })(),
+  // Two-handed swing: hands come down from overhead; contact is where they reach furthest forward.
+  swing: (() => { const top = argmax(CLIPS.swing, p => y(p, J.HandR)); return argmax(CLIPS.swing, p => z(p, J.HandR), top); })(),
 };
 const clipEnd = (c: Clip) => c.frames.length - 1;
 
@@ -55,6 +57,94 @@ function lean(p: Pose, angle: number, axis: 'x' | 'z' = 'x') { rotate(p, UPPER, 
 
 export interface Motion { distance: number; speed: number }
 
+// Bend the knees by lowering everything, then putting the feet back where they were.
+function crouch(p: Pose, by: number) {
+  const fl = get(p, J.FootL), fr = get(p, J.FootR);
+  translate(p, ALL, { y: -by });
+  placeFoot(p, true, fl); placeFoot(p, false, fr);
+}
+
+// Phase of a move at frame t: 0..1 through the startup, then 1 through active, with `rec`
+// running 0..1 over recovery.
+function phase(t: number, startup: number, active: number, recovery: number) {
+  const wind = clamp01(t / Math.max(1, startup));
+  const rec = clamp01((t - startup - active) / Math.max(1, recovery));
+  return { wind, rec, hit: t >= startup && t < startup + active };
+}
+
+// Procedural strikes, shared by players and enemies. k runs 0..1 into contact; `out` blends
+// back to guard.
+function flyingKnee(time: number, k: number, air: number): Pose {
+  const pose = guard(time);
+  translate(pose, ALL, { y: 0.45 * air });
+  placeFoot(pose, false, { x: -0.12, y: 0.45 * air + 0.55 * k, z: 0.1 + 0.05 * k });
+  placeFoot(pose, true, { x: 0.13, y: 0.45 * air + 0.05, z: -0.3 * k });
+  reach(pose, true, { x: 0.2, y: 1.4 + 0.45 * air, z: 0.45 * k + 0.1 });
+  reach(pose, false, { x: -0.2, y: 1.4 + 0.45 * air, z: 0.45 * k + 0.1 });
+  lean(pose, 0.25 * k);
+  return pose;
+}
+
+function shove(time: number, k: number): Pose {
+  const pose = guard(time);
+  const back = k < 0 ? -k : 0, push = Math.max(0, k);
+  reach(pose, true, { x: 0.22, y: 1.3, z: 0.12 + 0.55 * push - 0.12 * back });
+  reach(pose, false, { x: -0.22, y: 1.3, z: 0.12 + 0.55 * push - 0.12 * back });
+  lean(pose, 0.35 * push - 0.25 * back);
+  return pose;
+}
+
+// Horizontal elbow: the right arm comes up level with the shoulder, coils back, then whips across.
+function elbow(time: number, coil: number, k: number): Pose {
+  const pose = guard(time);
+  rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.9 * coil - 0.9 * k);
+  const up = Math.max(coil, k);
+  reach(pose, false, { x: -0.3 + 0.35 * k, y: 1.3 + 0.18 * up, z: 0.05 + 0.1 * k }, { x: -0.6, y: 0.3, z: 1 });
+  lean(pose, 0.2 * k - 0.1 * coil);
+  return pose;
+}
+
+function sweep(time: number, k: number, low: number): Pose {
+  const pose = guard(time);
+  crouch(pose, 0.38 * low);
+  const a = -0.6 + 2.8 * k; // right foot arcs from behind-right to in front-left
+  placeFoot(pose, false, { x: -0.85 * Math.cos(a), y: 0.07, z: 0.85 * Math.sin(a) });
+  reach(pose, true, { x: 0.35, y: 0.95 - 0.5 * low, z: 0.3 });
+  rotate(pose, ALL, get(pose, J.FootL), 'y', -0.8 * k);
+  lean(pose, 0.35 * low);
+  return pose;
+}
+
+function stomp(time: number, lift: number, k: number): Pose {
+  const pose = guard(time);
+  placeFoot(pose, false, { x: -0.13, y: 0.5 * lift * (1 - k) + 0.03, z: 0.25 + 0.3 * k });
+  reach(pose, true, { x: 0.45, y: 1.2, z: 0.05 }); reach(pose, false, { x: -0.4, y: 1.25, z: -0.05 });
+  lean(pose, 0.15 + 0.25 * k);
+  rotate(pose, [J.Head], get(pose, J.Neck), 'x', 0.5);
+  return pose;
+}
+
+// Rising strike: crouch, then drive a fist up through his chin.
+function rising(time: number, wind: number, k: number, left: boolean): Pose {
+  const pose = sample(CLIPS.cross, KEYS.cross * 0.3);
+  crouch(pose, 0.22 * wind * (1 - k));
+  translate(pose, ALL, { y: 0.06 * k });
+  const side = left ? 1 : -1;
+  reach(pose, left, { x: 0.12 * side, y: 0.95 + 1.0 * k, z: 0.25 + 0.25 * k }, { x: 0.5 * side, y: -1, z: 0 });
+  rotate(pose, UPPER, get(pose, J.Hips), 'y', side * (-0.4 * wind * (1 - k) + 0.3 * k));
+  lean(pose, -0.18 * k + 0.15 * wind * (1 - k));
+  return pose;
+}
+
+// Sprinting into range at the start of a long lunge.
+function dash(time: number, t: number): Pose {
+  const pose = sample(CLIPS.dash, t * 1.6, true);
+  lean(pose, 0.2);
+  return pose;
+}
+
+const settle = (pose: Pose, rec: number, time: number) => mix(pose, guard(time), easeInOut(rec));
+
 export function playerPose(p: Player, w: World, m: Motion): Pose {
   const time = w.frame;
   switch (p.state) {
@@ -64,12 +154,32 @@ export function playerPose(p: Player, w: World, m: Motion): Pose {
       return locomotion(clip, m.distance, m.speed, time, 2.8 / clip.stride);
     }
     case 'attack': {
-      if (p.smash) { const s = T.combo[2]; return strike('slash', p.t, s.startup, s.active, s.recovery, time, Math.max(0, KEYS.slash - 14)); }
-      // A bottle throw is a short attack that starts already marked as landed.
-      if (p.target === null && p.hasHit && p.dur === 14) return strike('cross', p.t, 4, 2, 8, time);
-      const s = T.combo[p.combo];
-      const pose = strike(p.combo === 0 ? 'jab' : p.combo === 1 ? 'cross' : 'kick', p.t, s.startup, s.active, s.recovery, time);
-      return pose;
+      const s = T.moves[p.move], t = p.t - p.lead;
+      if (t < 0) return dash(time, p.t);
+      const { wind, rec, hit } = phase(t, s.startup, s.active, s.recovery);
+      const k = hit || rec > 0 ? 1 : easeIn(wind);
+      switch (p.move) {
+        case 'jab': return strike('jab', t, s.startup, s.active, s.recovery, time);
+        case 'cross': return strike('cross', t, s.startup, s.active, s.recovery, time);
+        case 'roundhouse': return strike('kick', t, s.startup, s.active, s.recovery, time);
+        case 'smash': return strike('slash', t, s.startup, s.active, s.recovery, time, Math.max(0, KEYS.slash - 14));
+        case 'throw': return strike('cross', t, s.startup, s.active, s.recovery, time);
+        case 'spike': return strike('swing', t, s.startup, s.active, s.recovery, time, Math.max(0, KEYS.swing - 16));
+        case 'juggle': {
+          // Alternate hands, punching up at a man in the air.
+          const pose = strike(p.hits % 2 ? 'cross' : 'jab', t, s.startup, s.active, s.recovery, time);
+          const left = p.hits % 2 === 0;
+          if (rec < 1) reach(pose, left, { x: left ? 0.15 : -0.15, y: 1.45 + 0.4 * k * (1 - rec), z: 0.3 + 0.3 * k * (1 - rec) });
+          lean(pose, -0.15 * k * (1 - rec));
+          return pose;
+        }
+        case 'uppercut': return settle(rising(time, wind, k, false), rec, time);
+        case 'riposte': return settle(rising(time, wind, k, true), rec, time); // the other hand
+        case 'sweep': return settle(sweep(time, hit || rec > 0 ? 0.6 + 0.4 * clamp01((t - s.startup) / s.active) : 0.6 * easeIn(wind), Math.min(1, wind * 2)), rec, time);
+        case 'knee': return settle(flyingKnee(time, k, Math.sin(clamp01(t / (s.startup + s.active + 4)) * Math.PI)), rec, time);
+        case 'stomp': return settle(stomp(time, wind, hit || rec > 0 ? 1 : 0), rec, time);
+      }
+      return guard(time);
     }
     case 'counter': {
       // A fast cross with extra twist through the hips.
@@ -98,14 +208,6 @@ export function playerPose(p: Player, w: World, m: Motion): Pose {
       return pose;
     }
     case 'hitstun': return reel(time, p.t, p.dur);
-    case 'grabbed': {
-      const pose = guard(time);
-      const f = Math.sin(time * 0.6);
-      reach(pose, true, { x: 0.3, y: 1.75 + 0.15 * f, z: 0.2 }); reach(pose, false, { x: -0.3, y: 1.75 - 0.15 * f, z: 0.2 });
-      placeFoot(pose, true, { x: 0.12, y: 0.12 + 0.1 * f, z: 0.1 }); placeFoot(pose, false, { x: -0.12, y: 0.12 - 0.1 * f, z: -0.05 });
-      translate(pose, ALL, { y: 0.2 });
-      return pose;
-    }
     case 'down': return downed(time, 1);
   }
 }
@@ -136,7 +238,72 @@ function knockedDown(time: number, t: number): Pose {
   return pose;
 }
 
-const telegraph = { thug: 'cross', heavy: 'slash', boss: 'cross', grappler: 'cross', thrower: 'cross' } as const;
+// Launched: tipped back and flailing; the renderer lifts him to his height off the floor.
+function airborne(time: number, t: number): Pose {
+  const pose = guard(time);
+  const f = Math.sin(t * 0.5);
+  reach(pose, true, { x: 0.55, y: 1.5 + 0.15 * f, z: -0.1 }); reach(pose, false, { x: -0.55, y: 1.5 - 0.15 * f, z: -0.1 });
+  placeFoot(pose, true, { x: 0.15, y: 0.25 + 0.1 * f, z: 0.2 }); placeFoot(pose, false, { x: -0.15, y: 0.2 - 0.1 * f, z: 0.3 });
+  fallBack(pose, Math.min(0.55, t / 20));
+  return pose;
+}
+
+// Enemy swing at frame t of wind-up + active + recovery.
+function enemyStrike(e: Enemy, time: number): Pose {
+  const a = T.attacks[e.attack];
+  const t = e.state === 'windup' ? e.t : e.state === 'active' ? a.windup + e.t : a.windup + a.active + e.t;
+  const windup = e.state === 'windup' ? e.dur : a.windup; // the boss winds up faster when enraged
+  const { wind, rec, hit } = phase(e.state === 'windup' ? e.t * a.windup / Math.max(1, windup) : t, a.windup, a.active, a.recovery);
+  const k = hit || rec > 0 ? 1 : 0;
+  switch (e.attack) {
+    case 'kick': {
+      // Only the chamber plays over the long wind-up, leaning back so the knee rising reads.
+      const pose = strike('kick', wind * a.windup + (k ? t - a.windup : 0), a.windup, a.active, a.recovery, time, KEYS.kick - 12);
+      if (!k) lean(pose, -0.2 * wind);
+      return pose;
+    }
+    case 'haymaker': {
+      const contact = KEYS.slash, from = Math.max(0, contact - 18);
+      if (!k) return sample(CLIPS.slash, from + (contact - from) * easeIn(wind));
+      return mix(sample(CLIPS.slash, contact + (clipEnd(CLIPS.slash) - contact) * rec * 0.6), guard(time), easeOut(rec));
+    }
+    case 'shove': return settle(shove(time, k ? 1 : -Math.sin(wind * Math.PI * 0.5)), rec, time);
+    case 'elbow': return settle(elbow(time, k ? 0 : Math.sin(wind * Math.PI * 0.5), k), rec, time);
+    case 'spinKick': {
+      // Turns his back on you through the wind-up (the tell), then the heel comes round.
+      const pose = strike('kick', wind * a.windup * 0.8 + (k ? t - a.windup : 0), a.windup, a.active, a.recovery, time);
+      if (!k) rotate(pose, ALL, { x: 0, y: 0, z: 0 }, 'y', -2.6 * easeIn(wind));
+      return pose;
+    }
+    case 'charge': {
+      // Head down, shoulder first.
+      const pose = k && rec === 0 ? dash(time, e.t) : guard(time);
+      if (!k) crouch(pose, 0.2 * wind);
+      rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.7 * (k ? 1 - rec : wind));
+      lean(pose, 0.45 * (k ? 1 - rec : wind));
+      reach(pose, true, { x: 0.15, y: 1.25, z: 0.3 }); reach(pose, false, { x: -0.25, y: 1.2, z: 0.05 });
+      return pose;
+    }
+    case 'flyingKnee': {
+      if (!k) { const pose = flyingKnee(time, 0, 0); crouch(pose, 0.25 * wind); reach(pose, true, { x: 0.3, y: 1.1, z: -0.3 * wind }); reach(pose, false, { x: -0.3, y: 1.1, z: -0.3 * wind }); return pose; }
+      const air = rec > 0 ? 0 : Math.sin(clamp01(e.t / a.active) * Math.PI);
+      return settle(flyingKnee(time, 1, air), rec, time);
+    }
+    default: {
+      // Hook (and the cup throw): a cocked right hand, coiled shoulders, then the cross.
+      const pose = sample(CLIPS.cross, KEYS.cross * (k ? 1 : easeIn(wind)));
+      if (!k) {
+        const back = Math.sin(wind * Math.PI * 0.85);
+        reach(pose, false, { x: -0.32, y: 1.4, z: -0.3 * back + 0.1 });
+        rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.5 * back);
+        lean(pose, -0.12 * back);
+        return pose;
+      }
+      if (rec === 0) return pose;
+      return mix(sample(CLIPS.cross, KEYS.cross + (clipEnd(CLIPS.cross) - KEYS.cross) * rec * 0.6), guard(time), easeOut(rec));
+    }
+  }
+}
 
 export function enemyPose(e: Enemy, w: World, m: Motion): Pose {
   const time = w.frame + e.id * 37; // desync idle breathing between enemies
@@ -144,44 +311,9 @@ export function enemyPose(e: Enemy, w: World, m: Motion): Pose {
   switch (e.state) {
     case 'spawn': case 'circle': case 'approach':
       return locomotion(walkClip, m.distance, m.speed, time, e.state === 'approach' ? 1.6 : 1.2);
-    case 'windup': case 'active': {
-      // The wind-up spans the whole telegraph so the tell is readable; active holds contact.
-      const u = e.state === 'windup' ? easeIn(clamp01(e.t / Math.max(1, e.dur))) : 1;
-      if (e.kind === 'grappler') {
-        // Arms spread wide, then a two-handed lunge.
-        const pose = guard(time);
-        const lunge = e.state === 'active' ? 1 : 0;
-        reach(pose, true, { x: 0.75 - 0.55 * lunge, y: 1.3, z: 0.2 + 0.45 * lunge });
-        reach(pose, false, { x: -0.75 + 0.55 * lunge, y: 1.3, z: 0.2 + 0.45 * lunge });
-        lean(pose, 0.15 * u + 0.3 * lunge);
-        return pose;
-      }
-      const clip = e.unblockable ? 'slash' : telegraph[e.kind];
-      const contact = KEYS[clip];
-      const startFrom = clip === 'slash' ? Math.max(0, contact - 18) : 0;
-      const pose = sample(CLIPS[clip], startFrom + (contact - startFrom) * u);
-      if (clip === 'cross' && e.state === 'windup') {
-        // Exaggerate the tell: cock the right hand back and coil the shoulders away.
-        const back = Math.sin(clamp01(e.t / Math.max(1, e.dur)) * Math.PI * 0.85);
-        reach(pose, false, { x: -0.32, y: 1.4, z: -0.3 * back + 0.1 });
-        rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.5 * back);
-        lean(pose, -0.12 * back);
-      }
-      return pose;
-    }
-    case 'recover': {
-      const clip = e.unblockable ? 'slash' : telegraph[e.kind];
-      const contact = KEYS[clip], end = clipEnd(CLIPS[clip]);
-      const u = clamp01(e.t / Math.max(1, e.dur));
-      return mix(sample(CLIPS[clip], contact + (end - contact) * u * 0.6), guard(time), easeOut(u));
-    }
-    case 'holding': {
-      const pose = guard(time);
-      reach(pose, true, { x: 0.18, y: 1.2, z: 0.55 }); reach(pose, false, { x: -0.18, y: 1.2, z: 0.55 });
-      lean(pose, 0.1);
-      return pose;
-    }
+    case 'windup': case 'active': case 'recover': return enemyStrike(e, time);
     case 'stun': return reel(time, e.t, e.dur);
+    case 'air': return airborne(time, e.t);
     case 'down': return knockedDown(time, e.t);
     case 'getup': {
       const u = clamp01(e.t / e.dur);
@@ -190,6 +322,7 @@ export function enemyPose(e: Enemy, w: World, m: Motion): Pose {
     case 'dead': return knockedDown(time, e.t);
   }
 }
+
 
 // Short crossfades between states so nothing pops, except into a strike's contact frame.
 export class Blender {

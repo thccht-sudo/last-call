@@ -17,39 +17,45 @@ const face = new URLSearchParams(location.search).has('face');
 const N = face ? 2 : 8;
 
 // Each entry: total frames, and a function that sets up state for frame t and returns a pose.
+// Player moves go by their tuning name (jab, uppercut, knee...), enemy attacks by theirs with
+// an e- prefix (e-hook, e-flyingKnee...). ?lead=8 adds lunge travel frames to a player move.
 const still = { distance: 0, speed: 0 };
-const atk = (combo: number) => {
-  const s = T.combo[combo];
-  return { total: s.startup + s.active + s.recovery, pose: (t: number) => { Object.assign(p, { state: 'attack', combo, t, smash: false, target: 1, hasHit: false }); return playerPose(p, w, still); } };
-};
-const enemyAtk = (kind: Enemy['kind'], unblockable: boolean) => {
-  const k = T[kind];
-  return {
-    total: k.windup + k.active + k.recovery,
-    pose: (t: number) => {
-      Object.assign(e, { kind, unblockable });
-      if (t < k.windup) Object.assign(e, { state: 'windup', t, dur: k.windup });
-      else if (t < k.windup + k.active) Object.assign(e, { state: 'active', t: t - k.windup, dur: k.active });
-      else Object.assign(e, { state: 'recover', t: t - k.windup - k.active, dur: k.recovery });
+const lead = Number(new URLSearchParams(location.search).get('lead') ?? 0);
+const MOVES: Record<string, { total: number; pose: (t: number) => Pose }> = {};
+for (const [name, s] of Object.entries(T.moves)) {
+  MOVES[name] = {
+    total: lead + s.startup + s.active + s.recovery,
+    pose: t => { Object.assign(p, { state: 'attack', move: name, lead, t, target: 1, hasHit: false, hits: 0 }); return playerPose(p, w, still); },
+  };
+}
+for (const [name, a] of Object.entries(T.attacks)) {
+  MOVES[`e-${name}`] = {
+    total: a.windup + a.active + a.recovery,
+    pose: t => {
+      Object.assign(e, { kind: 'thug', attack: name, unblockable: a.red });
+      if (t < a.windup) Object.assign(e, { state: 'windup', t, dur: a.windup });
+      else if (t < a.windup + a.active) Object.assign(e, { state: 'active', t: t - a.windup, dur: a.active });
+      else Object.assign(e, { state: 'recover', t: t - a.windup - a.active, dur: a.recovery });
       return enemyPose(e, w, still);
     },
   };
-};
-const MOVES: Record<string, { total: number; pose: (t: number) => Pose }> = {
-  jab: atk(0), cross: atk(1), kick: atk(2),
-  smash: { total: 32, pose: t => { Object.assign(p, { state: 'attack', combo: 2, t, smash: true }); return playerPose(p, w, still); } },
-  counter: { total: T.counter.frames, pose: t => { Object.assign(p, { state: 'counter', t, dur: T.counter.frames }); return playerPose(p, w, still); } },
-  dodge: { total: T.dodge.frames, pose: t => { Object.assign(p, { state: 'dodge', t, dur: T.dodge.frames }); return playerPose(p, w, still); } },
-  hitstun: { total: 20, pose: t => { Object.assign(p, { state: 'hitstun', t, dur: 20 }); return playerPose(p, w, still); } },
-  grabbed: { total: 30, pose: t => { Object.assign(p, { state: 'grabbed', t }); w.frame = t; return playerPose(p, w, still); } },
-  run: { total: 40, pose: t => { Object.assign(p, { state: 'free' }); return playerPose(p, w, { distance: t * T.player.speed / 60, speed: 1 }); } },
-  swagger: { total: 60, pose: t => { Object.assign(e, { state: 'circle', kind: 'thug' }); return enemyPose(e, w, { distance: t * 2 / 60, speed: 0.6 }); } },
-  enemyJab: enemyAtk('thug', false), haymaker: enemyAtk('heavy', true), grapple: enemyAtk('grappler', true), throw: enemyAtk('thrower', false),
-  knockdown: { total: 40, pose: t => { Object.assign(e, { state: 'down', t, dur: 70 }); return enemyPose(e, w, still); } },
-  getup: { total: 20, pose: t => { Object.assign(e, { state: 'getup', t, dur: 20 }); return enemyPose(e, w, still); } },
-};
+}
+Object.assign(MOVES, {
+  counter: { total: T.counter.frames, pose: (t: number) => { Object.assign(p, { state: 'counter', t, dur: T.counter.frames }); return playerPose(p, w, still); } },
+  dodge: { total: T.dodge.frames, pose: (t: number) => { Object.assign(p, { state: 'dodge', t, dur: T.dodge.frames }); return playerPose(p, w, still); } },
+  hitstun: { total: 20, pose: (t: number) => { Object.assign(p, { state: 'hitstun', t, dur: 20 }); return playerPose(p, w, still); } },
+  run: { total: 40, pose: (t: number) => { Object.assign(p, { state: 'free' }); return playerPose(p, w, { distance: t * T.player.speed / 60, speed: 1 }); } },
+  swagger: { total: 60, pose: (t: number) => { Object.assign(e, { state: 'circle', kind: 'thug' }); return enemyPose(e, w, { distance: t * 2 / 60, speed: 0.6 }); } },
+  air: { total: 36, pose: (t: number) => { Object.assign(e, { state: 'air', t }); return enemyPose(e, w, still); } },
+  knockdown: { total: 40, pose: (t: number) => { Object.assign(e, { state: 'down', t, dur: 70 }); return enemyPose(e, w, still); } },
+  getup: { total: 20, pose: (t: number) => { Object.assign(e, { state: 'getup', t, dur: 20 }); return enemyPose(e, w, still); } },
+});
 
-const m = MOVES[move];
+// ?clip=name&from=a&to=b shows raw baked mocap frames, for choosing clip ranges.
+const raw = new URLSearchParams(location.search).get('clip');
+const rawFrom = Number(new URLSearchParams(location.search).get('from') ?? 0);
+const rawTo = Number(new URLSearchParams(location.search).get('to') ?? (raw ? CLIPS[raw].frames.length - 1 : 0));
+const m = raw ? { total: rawTo - rawFrom + 1, pose: (t: number) => CLIPS[raw].frames[rawFrom + t] } : MOVES[move];
 const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('canvas')!, antialias: true });
 renderer.setSize(face ? 680 : N * 170, face ? 340 : N * 34);
 const scene = new THREE.Scene();

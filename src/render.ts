@@ -33,7 +33,7 @@ const FRATS = [
 ];
 const PANTS = [0x2b3448, 0x6b5a45, 0x3a3f46, 0x2a2a30];
 const SKINS = [0xe0b48a, 0xc89470, 0xf0c8a4, 0x8d5f43, 0xd9a882];
-const SCALE: Record<EnemyKind, number> = { thug: 1, heavy: 1.18, thrower: 0.95, grappler: 1.12, boss: 1.35 };
+const SCALE: Record<EnemyKind, number> = { thug: 1, heavy: 1.18, thrower: 0.95, kicker: 1.02, boss: 1.35 };
 const thugLook = (kind: EnemyKind, id: number): Look => {
   const f = kind === 'heavy' || kind === 'boss' ? FRATS[0] : FRATS[(id * 7) % FRATS.length];
   return {
@@ -169,13 +169,16 @@ export class Renderer {
       if (k >= 20) { this.restPose.delete(key); this.risingT.delete(key); }
     }
     const contact = p.state === 'attack' || p.state === 'counter';
-    f.apply(this.blender(key).next(`${p.state}:${p.combo}:${p.smash}`, target, contact || p.state === 'down'));
+    const travel = p.state === 'attack' && p.t < p.lead;
+    f.apply(this.blender(key).next(`${p.state}:${p.move}:${travel}`, target, (contact && !travel) || p.state === 'down'));
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
   }
 
   private poseEnemy(e: Enemy, f: Figure, w: World) {
     const key = `e${e.id}`;
     f.place(e.pos, e.facing);
+    // Launched enemies fly at their height; a knockout in the air starts the ragdoll up there.
+    if (e.state === 'air' || (e.state === 'dead' && !this.ragdolls.has(key))) f.root.position.y = e.z;
     let target = enemyPose(e, w, this.motion(key, e.pos, T[e.kind].speed));
     if (e.state === 'down' || e.state === 'dead') {
       // Launch speed from the knockback the simulation gave them: harder hits fly higher.
@@ -187,9 +190,12 @@ export class Renderer {
     } else if (e.state === 'getup') {
       target = this.rising(key, target, e.t / Math.max(1, e.dur));
     } else this.restPose.delete(key);
-    f.apply(this.blender(key).next(e.state, target, e.state === 'active' || e.state === 'down' || e.state === 'dead'));
+    f.apply(this.blender(key).next(`${e.state}:${e.attack}`, target, e.state === 'active' || e.state === 'down' || e.state === 'dead'));
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
+    // Red attacks glow from the start of the wind-up so the dodge can be planned; both colours
+    // pulse once the counter window opens.
+    if (e.unblockable && e.state === 'windup') { glow = 0.3; color = 0xff2020; }
     if (strike !== null && strike <= counterWindow(w)) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
     if (e.state === 'stun' && e.t < 4) { glow = 0.8; color = 0xffffff; }
     f.glow(color, glow);
@@ -251,6 +257,8 @@ export class Renderer {
       if (ev.type === 'shatter') this.shards(ev.pos);
       if (ev.type === 'tag') this.popup(ev.pos, 'TAG TEAM!');
       if (ev.type === 'slam') { this.burst(ev.pos, 0xffffff, 0.5, 12); this.popup(ev.pos, 'SLAM!'); }
+      if (ev.type === 'launch') this.burst(ev.pos, 0xffd23f, 0.3, 10);
+      if (ev.type === 'spike') { props?.blast(ev.pos, 2.0, 4); this.burst({ ...ev.pos }, 0xffffff, 0.6, 14); this.popup(ev.pos, 'SPIKE!'); }
       if (ev.type === 'deflect') { this.burst(ev.pos, 0xffd23f, 0.3, 8); this.popup(ev.pos, 'RETURN TO SENDER'); }
     }
   }
@@ -278,8 +286,8 @@ export class Renderer {
       const { sx, sy } = this.screen(p.pos.x, p.state === 'down' ? 0.9 : 2.25 * CAST[i].look.scale, p.pos.y);
       v.tag.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -100%)`;
       const reviving = p.state === 'down' && p.revive > 0;
-      v.tag.textContent = p.state === 'grabbed' ? `${CAST[i].name} · MASH!` : p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
-      v.tag.classList.toggle('down', p.state === 'down' || p.state === 'grabbed');
+      v.tag.textContent = p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
+      v.tag.classList.toggle('down', p.state === 'down');
     });
     for (let i = w.players.length; i < this.players.length; i++) { this.scene.remove(this.players[i].fig.root); this.players[i].tag.remove(); }
     this.players.length = Math.min(this.players.length, w.players.length);
@@ -303,7 +311,7 @@ export class Renderer {
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
       const strike = framesToStrike(e);
       const canCounter = w.players.some(p => counterable(p, e, counterWindow(w)));
-      const mustDodge = e.unblockable && strike !== null && strike <= counterWindow(w);
+      const mustDodge = e.unblockable && strike !== null && strike <= counterWindow(w) + 10;
       v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
       v.prompt.textContent = canCounter ? 'Y' : mustDodge ? 'A' : '';
       v.prompt.className = 'prompt' + (canCounter ? ' counter' : mustDodge ? ' dodge' : '');

@@ -27,11 +27,12 @@ function untilStrikeIn(w: World, e: ReturnType<typeof duel>['e'], frames: number
 }
 
 describe('counter', () => {
-  it('a counter inside the window knocks the attacker down and the player takes nothing', () => {
+  it('a counter inside the window staggers the attacker and the player takes nothing', () => {
     const { w, e } = duel();
     untilStrikeIn(w, e, 10);
     step(w, press({ counter: true }));
-    expect(e.state).toBe('down');
+    expect(e.state).toBe('stun');
+    expect(e.hp).toBe(T.thug.hp - T.counter.damage);
     run(w, 60);
     expect(w.players[0].hp).toBe(T.player.hp);
   });
@@ -42,7 +43,7 @@ describe('counter', () => {
     step(w, press({ counter: true }));
     expect(w.players[0].state).toBe('whiff');
     run(w, 40);
-    expect(w.players[0].hp).toBe(T.player.hp - T.thug.damage);
+    expect(w.players[0].hp).toBe(T.player.hp - T.attacks[e.attack].damage);
   });
 
   it('a heavy cannot be countered, but a dodge avoids it', () => {
@@ -50,7 +51,7 @@ describe('counter', () => {
     untilStrikeIn(a.w, a.e, 8);
     step(a.w, press({ counter: true }));
     run(a.w, 40);
-    expect(a.w.players[0].hp).toBe(T.player.hp - T.heavy.damage);
+    expect(a.w.players[0].hp).toBe(T.player.hp - T.attacks[a.e.attack].damage);
 
     const b = duel('heavy');
     untilStrikeIn(b.w, b.e, 6);
@@ -81,7 +82,8 @@ describe('freeflow attacks', () => {
       run(w, 12);
     }
     expect(e.state).toBe('down');
-    expect(e.hp).toBe(T.heavy.hp - T.combo.reduce((s, c) => s + c.damage, 0));
+    const m = T.moves;
+    expect(e.hp).toBe(T.heavy.hp - m.jab.damage - m.cross.damage - m.roundhouse.damage);
   });
 
   it('a hit interrupts a thug wind-up but not a heavy one', () => {
@@ -104,12 +106,13 @@ describe('bottle', () => {
     const { w, e } = duel('thug', { x: 3, y: 3.2 });
     e.state = 'stun'; e.dur = 999;
     w.players[0].pos = { x: w.bottles[0].home.x, y: w.bottles[0].home.y + 1 };
-    step(w, press({ grab: true }));
+    step(w, press({ bottle: true }));
     expect(w.players[0].holding).not.toBeNull();
-    step(w, press({ grab: true, mx: 1 }));
+    step(w, press({ bottle: true, mx: 1 }));
     run(w, 60);
     expect(e.state).toBe('down');
-    expect(e.hp).toBe(T.thug.hp - T.bottle.damage);
+    expect(e.hp).toBeLessThanOrEqual(T.thug.hp - T.bottle.damage); // plus a slam if it sends him into the planter
+
   });
 });
 
@@ -142,18 +145,17 @@ describe('crowd', () => {
   });
 });
 
-// Reads prompts like a decent player: counters yellow, knocks cups back, dodges red, mashes out
-// of grabs, helps a downed partner, otherwise attacks the nearest enemy.
+// Reads prompts like a decent player: counters yellow, knocks cups back, dodges red (sideways,
+// so a lunge goes past), helps a downed partner, otherwise attacks the nearest enemy.
 function botFor(w: World, i: number): Input {
   const p = w.players[i];
-  if (p.state === 'grabbed') return press({ attack: w.frame % 2 === 0 });
   if (w.cups.some(c => deflectable(p, c) && Math.hypot(c.pos.x - p.pos.x, c.pos.y - p.pos.y) < 1.4)) return press({ counter: true });
   for (const e of w.enemies) {
     const f = framesToStrike(e);
     if (f === null || f > 12) continue;
     if (counterable(p, e)) return press({ counter: true });
     const d = Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
-    if (e.unblockable && d < 2.6 && e.focus === i) return press({ dodge: true, mx: p.pos.x - e.pos.x, my: p.pos.y - e.pos.y });
+    if (e.unblockable && d < T.attacks[e.attack].from + 1.5 && e.focus === i) return press({ dodge: true, mx: -(p.pos.y - e.pos.y), my: p.pos.x - e.pos.x });
   }
   const down = w.players.find(o => o.state === 'down');
   if (down && down !== p) return press({ mx: down.pos.x - p.pos.x, my: down.pos.y - p.pos.y });
@@ -239,7 +241,7 @@ describe('co-op', () => {
     expect(e.focus).toBe(1);
     w.players[0].pos = { x: 0, y: 0.2 };
     step(w, [press({ counter: true }), NO_INPUT]);
-    expect(e.state).toBe('down');
+    expect(e.state).toBe('stun');
   });
 
   it('tag-team hits land harder', () => {
@@ -251,7 +253,7 @@ describe('co-op', () => {
     const afterFirst = e.hp;
     step(w, [NO_INPUT, press({ attack: true, mx: -1 })]);
     run(w, 10);
-    expect(afterFirst - e.hp).toBe(Math.round(T.combo[0].damage * T.coop.tagMultiplier));
+    expect(afterFirst - e.hp).toBe(Math.round(T.moves.jab.damage * T.coop.tagMultiplier));
   });
 
   it('two prompt-reading players clear the bigger co-op waves', () => {
@@ -277,27 +279,33 @@ describe('new enemies', () => {
     expect(w.players[0].hp).toBe(T.player.hp);
   });
 
-  it('a grab can be mashed out of', () => {
-    const { w, e } = duel('grappler');
-    untilStrikeIn(w, e, 0);
-    run(w, 3);
-    expect(w.players[0].state).toBe('grabbed');
-    for (let i = 0; i < T.grab.escapePresses * 2; i++) step(w, press({ attack: i % 2 === 0 }));
-    expect(w.players[0].state).toBe('free');
-    expect(e.state).toBe('stun');
+  it('the kicker\'s flying knee is red: it can\'t be countered, and a dodge to the side beats it', () => {
+    const kneeDuel = () => {
+      const d = duel('kicker', { x: 0, y: -1.2 });
+      d.w.players[0].pos = { x: 0, y: 2.2 };
+      d.e.attack = 'flyingKnee';
+      d.e.state = 'approach'; d.e.t = 0; d.e.dur = 180;
+      for (let i = 0; i < 200 && (d.e.state as string) !== 'windup'; i++) step(d.w, NO_INPUT);
+      expect(d.e.state).toBe('windup');
+      expect(d.e.unblockable).toBe(true);
+      return d;
+    };
+    const a = kneeDuel();
+    for (let i = 0; i < 200 && framesToStrike(a.e)! > 6; i++) step(a.w, NO_INPUT);
+    step(a.w, press({ counter: true }));
+    run(a.w, 30);
+    expect(a.w.players[0].hp).toBe(T.player.hp - T.attacks.flyingKnee.damage);
+
+    const b = kneeDuel();
+    for (let i = 0; i < 200 && framesToStrike(b.e)! > 4; i++) step(b.w, NO_INPUT);
+    step(b.w, press({ dodge: true, mx: 1 }));
+    run(b.w, 40);
+    expect(b.w.players[0].hp).toBe(T.player.hp);
   });
 
-  it('a partner hitting the grappler frees you', () => {
-    const w = createWorld(7, 2);
-    w.wave = 0; w.waveTimer = 1e9;
-    w.players[0].pos = { x: 0, y: 2 }; w.players[1].pos = { x: 3, y: 0.8 };
-    const e = spawnEnemy(w, 'grappler', { x: 0, y: 0.8 }, 'circle');
-    untilStrikeIn(w, e, 0);
-    run(w, 3);
-    expect(w.players[0].state).toBe('grabbed');
-    step(w, [NO_INPUT, press({ attack: true, mx: -1 })]);
-    run(w, 14);
-    expect(w.players[0].state).toBe('free');
+  it('nothing grabs or holds you: every enemy attack is a strike', () => {
+    expect(Object.keys(T.attacks).every(a => !/grab|hold/i.test(a))).toBe(true);
+    expect(T.waves.flatMap(wv => wv.enemies)).not.toContain('grappler');
   });
 
   it('the boss swings twice (counterable) then throws an unblockable haymaker', () => {
@@ -324,13 +332,13 @@ describe('new enemies', () => {
   });
 
   it('knocking an enemy into a table slams them for extra damage', () => {
-    const { w, e } = duel('grappler', { x: 0.6, y: -2.0 });
+    const { w, e } = duel('heavy', { x: 0.6, y: -2.0 });
     w.players[0].pos = { x: 0.6, y: -0.9 };
     e.state = 'stun'; e.dur = 999;
     for (let i = 0; i < 3; i++) { step(w, press({ attack: true, my: -1 })); run(w, 12); }
     run(w, 10);
-    const dealt = T.combo.reduce((s, c) => s + c.damage, 0);
-    expect(T.grappler.hp - e.hp).toBe(dealt + T.slam.damage);
+    const dealt = T.moves.jab.damage + T.moves.cross.damage + T.moves.roundhouse.damage;
+    expect(T.heavy.hp - e.hp).toBe(dealt + T.slam.damage);
   });
 });
 
@@ -377,6 +385,181 @@ describe('difficulty and stats', () => {
     untilStrikeIn(w, e2, 0);
     run(w, 30);
     expect(s.missedCounters).toBeGreaterThan(0);
-    expect(s.takenBy.punches).toBeGreaterThan(0);
+    expect(Object.values(s.takenBy).reduce((a, b) => a + b, 0)).toBe(s.taken);
+    expect(s.taken).toBeGreaterThan(0);
+  });
+});
+
+// A staggered enemy in the open, well away from tables and walls.
+function dummy(kind: EnemyKind = 'thug', at = { x: 0, y: 0.8 }) {
+  const d = duel(kind, at);
+  d.e.state = 'stun'; d.e.dur = 9999;
+  d.w.players[0].pos = { x: at.x, y: at.y + 1.1 };
+  return d;
+}
+const up = press({ attack: true, my: -1 });
+// Press attack, then wait until the attack has landed (or the player is free again).
+function hit(w: World, input: Input = up, wait = 40) {
+  const p = w.players[0], before = p.lastHitAt;
+  step(w, input);
+  for (let i = 0; i < wait && p.lastHitAt === before; i++) step(w, NO_INPUT);
+}
+
+describe('hit detection and lunge', () => {
+  it('reaches an enemy at the edge of lunge range instead of whiffing short', () => {
+    const { w, e } = dummy('thug', { x: 5.2, y: 1.5 });
+    w.players[0].pos = { x: 0, y: 1.5 };
+    step(w, press({ attack: true, mx: 1 }));
+    run(w, T.maxTravel + 10);
+    expect(e.hp).toBe(T.thug.hp - T.moves.jab.damage);
+  });
+
+  it('the locked target is hit even if he drifts during the startup', () => {
+    const { w, e } = dummy();
+    step(w, up);
+    e.pos.x += 0.6; // stepped sideways mid-swing
+    run(w, 10);
+    expect(e.hp).toBeLessThan(T.thug.hp);
+  });
+
+  it('counter and dodge cancel an attack before it lands', () => {
+    const { w, e } = duel();
+    untilStrikeIn(w, e, 12);
+    step(w, press({ attack: true, mx: 1 })); // swing at nobody in particular
+    expect(w.players[0].state).toBe('attack');
+    step(w, press({ counter: true }));
+    expect(w.players[0].state).toBe('counter');
+    expect(e.state).toBe('stun');
+
+    const b = duel();
+    step(b.w, up);
+    step(b.w, press({ dodge: true, mx: 1 }));
+    expect(b.w.players[0].state).toBe('dodge');
+  });
+
+  it('getting hit never takes control away for long: dodge out of hitstun', () => {
+    const { w, e } = duel();
+    untilStrikeIn(w, e, 0);
+    run(w, 6);
+    const p = w.players[0];
+    expect(p.state).toBe('hitstun');
+    for (let i = 0; i < 30 && p.state === 'hitstun'; i++) step(w, press({ dodge: true, mx: 1 }));
+    expect(p.state).toBe('dodge');
+    expect(p.t).toBeLessThanOrEqual(1);
+  });
+
+  it('a prompt-reading player is never out of control for more than half a second', () => {
+    const w = createWorld(4);
+    let locked = 0, worst = 0;
+    for (let i = 0; i < 60 * 200 && w.result === 'playing'; i++) {
+      step(w, botFor(w, 0));
+      const p = w.players[0];
+      locked = p.state === 'hitstun' || p.state === 'whiff' ? locked + 1 : 0;
+      worst = Math.max(worst, locked);
+    }
+    expect(worst).toBeLessThanOrEqual(30);
+  });
+
+  it('one counter answers two swings at once', () => {
+    const { w, e } = duel('thug', { x: -0.9, y: 1.4 });
+    const f = spawnEnemy(w, 'thug', { x: 0.9, y: 1.4 }, 'circle');
+    for (const x of [e, f]) { x.attack = 'hook'; x.state = 'windup'; x.t = 20; x.dur = 30; x.unblockable = false; x.focus = 0; }
+    step(w, press({ counter: true }));
+    expect(e.state).toBe('stun');
+    expect(f.state).toBe('stun');
+    expect(w.stats[0].counters).toBe(2);
+  });
+});
+
+describe('combos', () => {
+  it('X X, pause, X is an uppercut that launches; X in the air juggles; the third air hit spikes him', () => {
+    const { w, e } = dummy('heavy');
+    const bystander = spawnEnemy(w, 'thug', { x: 1.4, y: 0.4 }, 'stun');
+    bystander.dur = 9999;
+    hit(w); run(w, 4);
+    hit(w); run(w, T.string.delay + 4);
+    hit(w);
+    expect(w.players[0].move).toBe('uppercut');
+    expect(e.state).toBe('air');
+    run(w, 4);
+    hit(w);
+    expect(w.players[0].move).toBe('juggle');
+    expect(e.state).toBe('air');
+    expect(e.z).toBeGreaterThan(0);
+    run(w, 4);
+    hit(w);
+    expect(w.players[0].move).toBe('juggle');
+    run(w, 4);
+    hit(w);
+    expect(w.players[0].move).toBe('spike');
+    expect(e.state).toBe('down');
+    expect(e.z).toBe(0);
+    expect(bystander.state).toBe('down'); // the shockwave
+    expect(w.stats[0].launches).toBe(1);
+  });
+
+  it('X X X straight through is a roundhouse; pull back on the third for a sweep that drops him at your feet', () => {
+    const a = dummy();
+    hit(a.w); hit(a.w); hit(a.w);
+    expect(a.w.players[0].move).toBe('roundhouse');
+    expect(a.e.state).toBe('down');
+
+    const b = dummy();
+    hit(b.w); hit(b.w);
+    hit(b.w, press({ attack: true, my: 1 }));
+    expect(b.w.players[0].move).toBe('sweep');
+    expect(b.e.state).toBe('down');
+    run(b.w, 30);
+    expect(Math.hypot(b.e.pos.x - b.w.players[0].pos.x, b.e.pos.y - b.w.players[0].pos.y)).toBeLessThan(2);
+  });
+
+  it('attack on a floored enemy is a stomp that keeps him down a little longer', () => {
+    const { w, e } = dummy();
+    hit(w); hit(w); hit(w, press({ attack: true, my: 1 })); // sweep
+    run(w, 20);
+    const left = e.dur - e.t, hp = e.hp;
+    hit(w, press({ attack: true }));
+    expect(w.players[0].move).toBe('stomp');
+    expect(e.hp).toBe(hp - T.moves.stomp.damage);
+    expect(e.dur - e.t).toBeGreaterThan(left - 10);
+  });
+
+  it('counter then attack is a riposte that launches', () => {
+    const { w, e } = duel();
+    untilStrikeIn(w, e, 10);
+    step(w, press({ counter: true }));
+    run(w, 6);
+    hit(w);
+    expect(w.players[0].move).toBe('riposte');
+    expect(e.state).toBe('air');
+  });
+
+  it('dodge then attack is a flying knee with extra reach', () => {
+    const { w, e } = dummy('thug', { x: 6.2, y: 1.5 });
+    w.players[0].pos = { x: -1, y: 1.5 };
+    step(w, press({ dodge: true, mx: 1 }));
+    run(w, T.followUp.dodgeFrom);
+    hit(w, press({ attack: true, mx: 1 }));
+    expect(w.players[0].move).toBe('knee');
+    expect(e.state).toBe('down');
+    expect(e.hp).toBe(T.thug.hp - T.moves.knee.damage);
+  });
+
+  it('a finisher near a table is steered into it for a slam', () => {
+    // Off to the side of the table, not lined up with it.
+    const { w, e } = dummy('thug', { x: -1.2, y: -1.9 });
+    w.players[0].pos = { x: -0.4, y: -0.9 };
+    hit(w); hit(w); hit(w);
+    run(w, 30);
+    expect(w.stats[0].slams).toBe(1);
+  });
+
+  it('juggles, finishers and follow-ups stay deterministic', () => {
+    const a = createWorld(21), b = createWorld(21);
+    for (let i = 0; i < 2400; i++) {
+      const inp = press({ mx: Math.sin(i / 40), my: Math.cos(i / 53), attack: i % 7 === 0 || i % 31 === 3, counter: i % 29 === 0, dodge: i % 61 === 0 });
+      step(a, inp); step(b, inp);
+    }
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });

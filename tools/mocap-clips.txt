@@ -11,3 +11,5 @@ call=dataset-1_call_normal_001
 taunt=dataset-1_respond_normal_001
 runProud=dataset-1_run_proud_001~
 runActive=dataset-1_run_active_001~
+dash=dataset-1_dash_active_001~
+swing=dataset-1_slash_normal_002@80-125

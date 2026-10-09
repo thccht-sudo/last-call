@@ -5,7 +5,7 @@ import Peer, { DataConnection } from 'peerjs';
 import type { Input, World, GameEvent } from './sim/world';
 
 // Presses travel as running counts so a lost or repeated packet can't drop or double a press.
-export interface NetInput { mx: number; my: number; attack: number; counter: number; dodge: number; grab: number; start: number }
+export interface NetInput { mx: number; my: number; attack: number; counter: number; dodge: number; bottle: number; start: number }
 type Msg =
   | { t: 'input'; input: NetInput }
   | { t: 'snap'; world: World; events: GameEvent[] }
@@ -56,7 +56,7 @@ abstract class Link {
 
 export class Host extends Link {
   readonly code: string;
-  private remote: NetInput = { mx: 0, my: 0, attack: 0, counter: 0, dodge: 0, grab: 0, start: 0 };
+  private remote: NetInput = { mx: 0, my: 0, attack: 0, counter: 0, dodge: 0, bottle: 0, start: 0 };
   private seen: NetInput = { ...this.remote };
   private pending: GameEvent[] = [];
   constructor() {
@@ -76,7 +76,7 @@ export class Host extends Link {
     const r = this.remote, s = this.seen;
     const input: Input = {
       mx: r.mx, my: r.my,
-      attack: r.attack > s.attack, counter: r.counter > s.counter, dodge: r.dodge > s.dodge, grab: r.grab > s.grab,
+      attack: r.attack > s.attack, counter: r.counter > s.counter, dodge: r.dodge > s.dodge, bottle: r.bottle > s.bottle,
     };
     const start = r.start > s.start;
     this.seen = { ...r };
@@ -95,7 +95,7 @@ export class Host extends Link {
 export class Guest extends Link {
   snaps: { world: World; at: number }[] = [];
   events: GameEvent[] = [];
-  private counts: NetInput = { mx: 0, my: 0, attack: 0, counter: 0, dodge: 0, grab: 0, start: 0 };
+  private counts: NetInput = { mx: 0, my: 0, attack: 0, counter: 0, dodge: 0, bottle: 0, start: 0 };
   constructor(readonly code: string) {
     super();
     this.peer.on('open', () => this.attach(this.peer.connect(PREFIX + code, { serialization: 'json', reliable: false })));
@@ -111,7 +111,7 @@ export class Guest extends Link {
   sendInput(i: Input, start: boolean) {
     const c = this.counts;
     c.mx = i.mx; c.my = i.my;
-    if (i.attack) c.attack++; if (i.counter) c.counter++; if (i.dodge) c.dodge++; if (i.grab) c.grab++; if (start) c.start++;
+    if (i.attack) c.attack++; if (i.counter) c.counter++; if (i.dodge) c.dodge++; if (i.bottle) c.bottle++; if (start) c.start++;
     this.send({ t: 'input', input: { ...c } });
   }
   takeEvents() { const e = this.events; this.events = []; return e; }
@@ -131,7 +131,10 @@ export function interpolated(snaps: { world: World; at: number }[], delayMs = 70
     q ? { x: q.x + (p.x - q.x) * k, y: q.y + (p.y - q.y) * k } : p;
   const w: World = { ...b.world };
   w.players = b.world.players.map(p => ({ ...p, pos: lerp(p.pos, a.world.players[p.index]?.pos) }));
-  w.enemies = b.world.enemies.map(e => ({ ...e, pos: lerp(e.pos, a.world.enemies.find(x => x.id === e.id)?.pos) }));
+  w.enemies = b.world.enemies.map(e => {
+    const was = a.world.enemies.find(x => x.id === e.id);
+    return { ...e, pos: lerp(e.pos, was?.pos), z: was ? was.z + (e.z - was.z) * k : e.z };
+  });
   w.cups = b.world.cups.map(c => ({ ...c, pos: lerp(c.pos, a.world.cups.find(x => x.id === c.id)?.pos) }));
   return w;
 }
