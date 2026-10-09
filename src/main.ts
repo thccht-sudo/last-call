@@ -1,5 +1,5 @@
 import './style.css';
-import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT } from './sim/world';
+import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT, Input } from './sim/world';
 import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
@@ -255,7 +255,7 @@ function hostTick() {
     if (dev) { controls.slots.push(dev); addPlayer(world); }
   }
   if (world.result !== 'playing' && (controls.startPressed(samples) || remote.start)) { restart(); return; }
-  const inputs = world.players.map((_, i) => i === 1 && online ? remote.input : controls.inputFor(i, samples));
+  const inputs = world.players.map((_, i) => i === 1 && online ? remote.input : i === 0 && manualInput ? manualInput : controls.inputFor(i, samples));
   step(world, inputs);
   renderer.events(world.events);
   react(world.events, world);
@@ -298,6 +298,10 @@ function tick() {
 const DT = 1000 / T.fps;
 let acc = 0, last = performance.now();
 let qualityCheckedAt = 0;
+// ?manual: the loop stops ticking on its own and game.advance(n, input) steps it, for AI
+// playtesters that look at a frame, decide, and act.
+const manual = new URLSearchParams(location.search).has('manual');
+let manualInput: Input | null = null;
 function frame(now: number) {
   // Slow motion: the simulation runs at a quarter speed for the finisher.
   acc += Math.min(100, now - last) * (now < slowUntil ? slowScale : 1);
@@ -309,6 +313,7 @@ function frame(now: number) {
   }
   if (started && world.result === 'playing' && !paused) tips(world, controls.isPad(0));
   // A little slack stops vsync jitter from alternating zero- and two-tick frames at 60 Hz.
+  if (manual) acc = 0;
   while (acc >= DT - 1) { tick(); acc -= DT; }
   acc = Math.max(0, acc);
   bars.forEach((bar, i) => {
@@ -324,7 +329,7 @@ function frame(now: number) {
     : guest
       ? 'WASD or arrows to move · J attack · K counter · Space dodge · E bottle'
       : 'P1: WASD · J attack · K counter · Space dodge · E bottle  |  P2: arrows · numpad 1 attack · 2 counter · 0 dodge · 3 bottle';
-  renderer.draw(world, Math.min(1, acc / DT));
+  renderer.draw(world, manual ? 1 : Math.min(1, acc / DT));
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -332,5 +337,15 @@ requestAnimationFrame(frame);
 // For automated checks and console tinkering.
 (window as unknown as { game: object }).game = {
   get world() { return world; }, T, controls, renderer, get paused() { return paused; },
+  // Manual stepping: hold `input` for n frames (presses only on the first), then draw.
+  advance(n: number, input: Partial<Input> = {}) {
+    for (let i = 0; i < n; i++) {
+      manualInput = { ...NO_INPUT, mx: input.mx ?? 0, my: input.my ?? 0, ...(i === 0 ? { attack: !!input.attack, counter: !!input.counter, dodge: !!input.dodge, bottle: !!input.bottle } : {}) };
+      tick();
+    }
+    manualInput = null;
+    renderer.draw(world, 1);
+  },
+  start() { if (!started) begin('kb1'); },
   get net() { return host ? { role: 'host', code: host.code, status: host.status } : guest ? { role: 'guest', status: guest.status, snaps: guest.snaps.length } : null; },
 };
