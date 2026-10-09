@@ -607,6 +607,15 @@ describe('evade', () => {
     run(w, 20);
     expect(w.players[0].hp).toBe(T.player.hp);
     expect(w.stats[0].perfects).toBe(1);
+    // ...and the knee that follows hits for the perfect-evade bonus.
+    const hp = e.hp;
+    e.state = 'stun'; e.dur = 999;
+    w.players[0].perfectAt = w.frame; // still within the window
+    step(w, press({ dodge: true, mx: e.pos.x - w.players[0].pos.x, my: e.pos.y - w.players[0].pos.y }));
+    run(w, T.followUp.dodgeFrom);
+    hit(w, press({ attack: true, mx: e.pos.x - w.players[0].pos.x, my: e.pos.y - w.players[0].pos.y }));
+    expect(w.players[0].move).toBe('knee');
+    expect(hp - e.hp).toBe(Math.round(T.moves.knee.damage * T.dodge.perfectKnee));
   });
 });
 

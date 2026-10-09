@@ -91,7 +91,9 @@ along the 18 mocap joints. `src/figure.ts` aims each bone along its joints every
 twist from the elbow or knee bend) and skins the mesh, with toon shading, a rim light and an
 ink outline that takes the yellow or red of a telegraph. Heads carry hair, beards, glasses,
 backwards caps (half the thugs), the kicker's red headband and the President's shades and
-chain. Players have a ring in their colour on the floor.
+chain. Players have a ring in their colour on the floor, and show through as a silhouette in
+that colour when an enemy or a prop stands in front of them. The knocked out sink away after a
+few seconds.
 
 Animation: posed from motion capture. Punches, the kick, the overhead smash,
 walks and the frat swagger are real mocap from the Bandai Namco Research Motion Dataset,
@@ -122,7 +124,9 @@ trash can and a traffic cone. Each browser runs its own copy, so it never affect
 AI playtesting: `?manual` stops the game loop and exposes `game.advance(frames, input)`, so an
 agent can look at a frame, decide and act. A council of AI playtesters (a first-time player, a
 telegraph reader, a combo explorer, an art director and an evade tester) played it this way
-from screenshots; their reports drove the readability fixes.
+from screenshots; their reports drove the readability fixes, and a second round of three
+checked that the fixes landed (player marker, banners, lunge lanes, move words) and found the
+last few (occlusion, stacked popups, bodies piling up).
 
 `npm install && npm run dev` to run locally. After each deploy CI plays the live site with
 `tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,

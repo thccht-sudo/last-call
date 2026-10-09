@@ -155,6 +155,7 @@ export class Figure {
   private inkHead = new THREE.MeshBasicMaterial({ color: 0x0a0a0c, side: THREE.BackSide });
   private m = new THREE.Matrix4();
   private chestDepth: number;
+  private body!: THREE.SkinnedMesh;
 
   constructor(look: Look, bind: Pose) {
     const mat = (color: number, _rough = 0.75) => toon(color);
@@ -182,6 +183,7 @@ export class Figure {
     outline.frustumCulled = false;
     outline.bind(skeleton, new THREE.Matrix4());
     this.root.add(body, outline);
+    this.body = body;
     this.chestDepth = build === 'heavy' ? 0.17 : build === 'lean' ? 0.125 : 0.14;
 
     // Torso frame for what's printed or sewn on the shirt.
@@ -332,6 +334,16 @@ export class Figure {
     this.torso.scale.y = neck.distanceTo(hips) / this.torsoLen;
     this.head.position.copy(head);
     this.head.quaternion.setFromRotationMatrix(frame(head.clone().sub(neck)));
+  }
+
+  // A silhouette in `color` drawn only where something stands in front of this figure, so a
+  // player is never lost behind an enemy or a bin.
+  xray(color: number) {
+    const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false, depthFunc: THREE.GreaterDepth });
+    const ghost = new THREE.SkinnedMesh(this.body.geometry, m);
+    ghost.frustumCulled = false; ghost.renderOrder = 5;
+    ghost.bind(this.body.skeleton, new THREE.Matrix4());
+    this.root.add(ghost);
   }
 
   // Telegraphs and hit flashes: the body lights up and the ink outline takes the colour.

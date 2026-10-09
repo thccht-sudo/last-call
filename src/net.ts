@@ -130,10 +130,16 @@ export function interpolated(snaps: { world: World; at: number }[], delayMs = 70
   const lerp = (p: { x: number; y: number }, q: { x: number; y: number } | undefined) =>
     q ? { x: q.x + (p.x - q.x) * k, y: q.y + (p.y - q.y) * k } : p;
   const w: World = { ...b.world };
-  w.players = b.world.players.map(p => ({ ...p, pos: lerp(p.pos, a.world.players[p.index]?.pos) }));
+  // Animation clocks interpolate too (while the state hasn't changed), so moves don't step at
+  // the snapshot rate.
+  const clock = (bt: number, at: number | undefined, same: boolean) => (same && at !== undefined && at <= bt ? at + (bt - at) * k : bt);
+  w.players = b.world.players.map(p => {
+    const was = a.world.players[p.index];
+    return { ...p, pos: lerp(p.pos, was?.pos), t: clock(p.t, was?.t, was?.state === p.state) };
+  });
   w.enemies = b.world.enemies.map(e => {
     const was = a.world.enemies.find(x => x.id === e.id);
-    return { ...e, pos: lerp(e.pos, was?.pos), z: was ? was.z + (e.z - was.z) * k : e.z };
+    return { ...e, pos: lerp(e.pos, was?.pos), z: was ? was.z + (e.z - was.z) * k : e.z, t: clock(e.t, was?.t, was?.state === e.state) };
   });
   w.cups = b.world.cups.map(c => ({ ...c, pos: lerp(c.pos, a.world.cups.find(x => x.id === c.id)?.pos) }));
   return w;

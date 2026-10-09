@@ -331,7 +331,7 @@ function frame(now: number) {
     const em = bar.querySelector<HTMLElement>('.style em')!, fill = bar.querySelector<HTMLElement>('.style span i')!;
     const rank = p ? styleRank(p.style) : -1;
     const tiers = T.style.tiers, lo = rank < 0 ? 0 : tiers[rank], hi = tiers[rank + 1] ?? T.style.max;
-    em.textContent = rank >= 0 && started ? T.style.names[rank] : '';
+    em.textContent = !started || !p ? '' : rank >= 0 ? T.style.names[rank] : p.style > 0 ? 'SOBER' : '';
     bar.style.setProperty('--rank', RANK_COLORS[Math.max(0, rank)]);
     fill.style.width = p && started && p.style > 0 ? `${Math.min(100, ((p.style - lo) / (hi - lo)) * 100)}%` : '0%';
     if (rank > (shownRank[i] ?? -1)) { em.classList.remove('up'); void em.offsetWidth; em.classList.add('up'); }

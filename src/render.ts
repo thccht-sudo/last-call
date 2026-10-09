@@ -6,7 +6,7 @@ import { buildKilroys } from './scene/kilroys';
 import { buildInterior } from './scene/interior';
 import { LEVELS } from './sim/level';
 import { Figure, Look } from './figure';
-import { CLIPS, Pose, mix } from './anim/pose';
+import { CLIPS, Pose, mix, J } from './anim/pose';
 import { playerPose, enemyPose, Blender, Motion } from './anim/moves';
 import { Ragdoll, Props } from './physics';
 
@@ -68,6 +68,9 @@ function laneTexture() {
   return laneTex;
 }
 
+const LEGS = new Set<number>([J.HipL, J.KneeL, J.FootL, J.ToeL, J.HipR, J.KneeR, J.FootR, J.ToeR]);
+const CORE = new Set<number>([J.Hips, J.Chest, J.Neck]);
+
 interface Fx { mesh: THREE.Object3D; life: number; max: number; vel?: THREE.Vector3; grow?: number }
 
 // What a figure looked like at the last two sim ticks, so drawing can interpolate between them
@@ -118,6 +121,7 @@ export class Renderer {
   private camTarget = new THREE.Vector3();
   private camPrev = new THREE.Vector3();
   private tracks = new Map<string, Track>();
+  private deadFor = new Map<number, number>();
   private camZoom = 1; private zoomPrev = 1;
   private trauma = 0; private kick = new THREE.Vector2(); private fovPunch = 0; private ticks = 0;
   private ragdolls = new Map<string, Ragdoll>();
@@ -190,10 +194,19 @@ export class Renderer {
     return pose;
   }
 
+  // Getting up out of a ragdoll: the legs plant first, then the hips and chest rise, then the
+  // arms and head follow, so limbs don't sweep through the body.
   private rising(key: string, target: Pose, u: number): Pose {
     this.ragdolls.delete(key);
     const rest = this.restPose.get(key);
-    return rest ? mix(rest, target, Math.min(1, u * u * 1.4)) : target;
+    if (!rest) return target;
+    const out = mix(rest, target, 0);
+    const ease = (x: number) => { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); };
+    for (let j = 0; j < out.length / 3; j++) {
+      const k = LEGS.has(j) ? ease(u * 1.7) : CORE.has(j) ? ease(u * 1.35 - 0.1) : ease(u * 1.2 - 0.2);
+      for (let c = 0; c < 3; c++) out[j * 3 + c] = rest[j * 3 + c] + (target[j * 3 + c] - rest[j * 3 + c]) * k;
+    }
+    return out;
   }
 
   // Record this tick's placement for a figure, turning toward the sim's facing at a capped rate
@@ -340,7 +353,7 @@ export class Renderer {
   clear() {
     for (const v of this.enemies.values()) { this.scene.remove(v.fig.root, v.lane); v.prompt.remove(); v.bar.remove(); v.edge.remove(); }
     this.enemies.clear();
-    this.moves.clear(); this.blenders.clear(); this.tracks.clear();
+    this.moves.clear(); this.blenders.clear(); this.tracks.clear(); this.deadFor.clear();
     this.ragdolls.clear(); this.restPose.clear(); this.risingT.clear();
     for (const p of this.props) p.reset();
     for (const v of this.cups.values()) { this.scene.remove(v.mesh); v.prompt.remove(); }
@@ -353,10 +366,17 @@ export class Renderer {
     return { sx: (v.x * 0.5 + 0.5) * innerWidth, sy: (-v.y * 0.5 + 0.5) * innerHeight };
   }
 
+  // Popups that land close together stack upward instead of piling on top of each other.
+  private recentPopups: { sx: number; sy: number; until: number }[] = [];
   private popup(pos: Vec, text: string, kind = '') {
     const el = document.createElement('div');
     el.className = `popup ${kind}`; el.textContent = text;
-    const { sx, sy } = this.screen(pos.x, 2.6, pos.y);
+    const now = performance.now();
+    this.recentPopups = this.recentPopups.filter(r => r.until > now);
+    const { sx } = this.screen(pos.x, 2.6, pos.y);
+    let { sy } = this.screen(pos.x, 2.6, pos.y);
+    while (this.recentPopups.some(r => Math.abs(r.sx - sx) < 120 && Math.abs(r.sy - sy) < 26)) sy -= 28;
+    this.recentPopups.push({ sx, sy, until: now + 500 });
     el.style.left = `${sx}px`; el.style.top = `${sy}px`;
     this.overlay.append(el);
     setTimeout(() => el.remove(), 900);
@@ -412,6 +432,7 @@ export class Renderer {
       ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; ring.renderOrder = 1;
       ring.scale.setScalar(1 / (CAST[i].look.scale * 1.08));
       fig.root.add(ring);
+      fig.xray(new THREE.Color(CAST[i].css).getHex());
       const tag = document.createElement('div'); tag.className = 'nametag';
       tag.style.setProperty('--c', CAST[i].css);
       this.overlay.append(tag);
@@ -447,7 +468,10 @@ export class Renderer {
     this.ticks++;
     this.props[w.stage]?.step(LEVELS[w.stage].obstacles);
     w.players.forEach((p, i) => this.posePlayer(p, this.playerView(i).fig, w));
-    for (const e of w.enemies) this.poseEnemy(e, this.enemyView(e).fig, w);
+    for (const e of w.enemies) {
+      if (e.state === 'dead') { const n = (this.deadFor.get(e.id) ?? 0) + 1; this.deadFor.set(e.id, n); if (n > 300) continue; }
+      this.poseEnemy(e, this.enemyView(e).fig, w);
+    }
     for (let i = this.fx.length - 1; i >= 0; i--) {
       const f = this.fx[i];
       f.life--;
@@ -499,6 +523,10 @@ export class Renderer {
       seen.add(e.id);
       const v = this.enemyView(e);
       this.show(`e${e.id}`, v.fig, alpha);
+      // The knocked out sink away after a few seconds so the floor doesn't fill with bodies.
+      const gone = this.deadFor.get(e.id) ?? 0;
+      if (gone > 200) v.fig.root.position.y -= Math.min(1.2, (gone - 200) * 0.012);
+      v.fig.root.visible = gone < 300;
       const at = v.fig.root.position;
       const head = new THREE.Vector3(at.x, 2.2 * SCALE[e.kind] + 0.1 + at.y, at.z).project(this.camera);
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
