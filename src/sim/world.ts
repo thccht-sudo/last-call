@@ -59,9 +59,18 @@ export type GameEvent =
   | { type: 'stage'; stage: number }
   | { type: 'ko'; pos: Vec; boss: boolean };
 
+// Per-player fight record, shown on the results screen.
+export interface Stats {
+  dealt: number; taken: number; takenBy: Record<string, number>;
+  missedCounters: number; counters: number; deflects: number; whiffs: number; dodges: number;
+  slams: number; kos: number; downs: number;
+}
+const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0 });
+
 export interface World {
   frame: number; hitstop: number; shake: number;
   players: Player[]; enemies: Enemy[]; bottles: Bottle[]; cups: Cup[];
+  difficulty: number; stats: Stats[];
   stage: number; wave: number; waveTimer: number; result: 'playing' | 'win' | 'lose';
   events: GameEvent[]; rng: number; nextId: number;
 }
@@ -95,10 +104,11 @@ export function addPlayer(w: World): Player {
   return p;
 }
 
-export function createWorld(seed = 1, playerCount = 1): World {
+export function createWorld(seed = 1, playerCount = 1, difficulty = 1): World {
   const w: World = {
     frame: 0, hitstop: 0, shake: 0,
     players: [newPlayer(0, LEVEL.playerStart)],
+    difficulty, stats: [newStats(), newStats()],
     enemies: [], bottles: [], cups: [], stage: 0, wave: -1, waveTimer: 30, result: 'playing',
     events: [], rng: seed >>> 0 || 1, nextId: 1,
   };
@@ -113,7 +123,7 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
   const k = T[kind];
   const e: Enemy = {
     id: w.nextId++, kind, pos: { ...pos }, facing: { x: 0, y: 1 }, vel: { x: 0, y: 0 },
-    hp: k.hp, maxHp: k.hp, state, t: 0, dur: state === 'spawn' ? 20 : 0,
+    hp: Math.round(k.hp * mods(w).enemyHp), maxHp: Math.round(k.hp * mods(w).enemyHp), state, t: 0, dur: state === 'spawn' ? 20 : 0,
     cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
     focus: 0, lastHitBy: -1, lastHitFrame: -999, unblockable: false, string: 0, enraged: false, slammed: false,
   };
@@ -195,9 +205,12 @@ export function framesToStrike(e: Enemy): number | null {
 
 // Any player in range can counter, including to save a partner. Throwers are countered by
 // knocking their cup back, not in melee.
-export function counterable(p: Player, e: Enemy): boolean {
+export const mods = (w: World) => T.difficulty[w.difficulty] ?? T.difficulty[1];
+export const counterWindow = (w: World) => Math.round(T.counter.window * mods(w).window);
+
+export function counterable(p: Player, e: Enemy, window: number = T.counter.window): boolean {
   const f = framesToStrike(e);
-  return f !== null && f <= T.counter.window && !e.unblockable && e.kind !== 'thrower' &&
+  return f !== null && f <= window && !e.unblockable && e.kind !== 'thrower' &&
     standing(p) && p.state !== 'grabbed' && dist(e.pos, p.pos) <= T.counter.range;
 }
 
@@ -223,7 +236,7 @@ function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, 
     dmg = Math.round(dmg * T.coop.tagMultiplier);
     w.events.push({ type: 'tag', pos: { ...e.pos } });
   }
-  if (by >= 0) { e.lastHitBy = by; e.lastHitFrame = w.frame; }
+  if (by >= 0) { e.lastHitBy = by; e.lastHitFrame = w.frame; w.stats[by].dealt += Math.min(dmg, Math.max(0, e.hp)); }
   e.hp -= dmg;
   const away = norm(sub(e.pos, from));
   const armour = hasArmour(e) && !force;
@@ -237,6 +250,7 @@ function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, 
     e.hp = 0;
     e.vel = { x: away.x * 0.3, y: away.y * 0.3 };
     setEnemy(e, 'dead', 0);
+    if (e.lastHitBy >= 0) w.stats[e.lastHitBy].kos++;
     w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' });
     return;
   }
@@ -263,6 +277,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
   if (action === 'dodge') {
     p.dodgeDir = dir; p.facing = dir;
     setPlayer(p, 'dodge', T.dodge.frames);
+    w.stats[p.index].dodges++;
     w.events.push({ type: 'dodge', by: p.index });
     return true;
   }
@@ -277,20 +292,22 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
       p.facing = n;
       setPlayer(p, 'counter', T.counter.frames - 8);
       w.hitstop = T.hitstop.light; w.shake = 0.15;
+      w.stats[p.index].deflects++;
       w.events.push({ type: 'deflect', pos: { ...cup.pos }, by: p.index });
       return true;
     }
     let best: Enemy | null = null;
     for (const e of w.enemies) {
-      if (counterable(p, e) && (!best || dist(e.pos, p.pos) < dist(best.pos, p.pos))) best = e;
+      if (counterable(p, e, counterWindow(w)) && (!best || dist(e.pos, p.pos) < dist(best.pos, p.pos))) best = e;
     }
-    if (!best) { setPlayer(p, 'whiff', T.counter.whiffFrames); w.events.push({ type: 'whiff', by: p.index }); return true; }
+    if (!best) { setPlayer(p, 'whiff', T.counter.whiffFrames); w.stats[p.index].whiffs++; w.events.push({ type: 'whiff', by: p.index }); return true; }
     const to = norm(sub(best.pos, p.pos));
     p.facing = to;
     p.pos = { x: best.pos.x - to.x * T.strikeDistance, y: best.pos.y - to.y * T.strikeDistance };
     setPlayer(p, 'counter', T.counter.frames);
     damageEnemy(w, best, T.counter.damage, p.pos, 4, 0, true, p.index, true);
     w.hitstop = T.hitstop.counter; w.shake = 0.35;
+    w.stats[p.index].counters++;
     w.events.push({ type: 'counter', pos: { ...best.pos }, by: p.index });
     return true;
   }
@@ -444,7 +461,10 @@ function dropBottle(w: World, p: Player, away: Vec) {
 }
 
 // Returns true if the hit put the player down.
-function hurtPlayer(w: World, p: Player, dmg: number, from: Vec, heavy: boolean, knock: number): boolean {
+function hurtPlayer(w: World, p: Player, base: number, from: Vec, heavy: boolean, knock: number, source: string): boolean {
+  const dmg = Math.max(1, Math.round(base * mods(w).damage));
+  const st = w.stats[p.index];
+  st.taken += Math.min(dmg, p.hp); st.takenBy[source] = (st.takenBy[source] ?? 0) + Math.min(dmg, p.hp);
   p.hp -= dmg;
   const away = norm(sub(p.pos, from));
   p.pos.x += away.x * knock; p.pos.y += away.y * knock;
@@ -456,6 +476,7 @@ function hurtPlayer(w: World, p: Player, dmg: number, from: Vec, heavy: boolean,
   const holder = w.enemies.find(x => x.state === 'holding' && x.focus === p.index);
   if (holder) setEnemy(holder, 'recover', T[holder.kind].recovery);
   p.hp = 0; p.revive = 0; p.escape = 0; setPlayer(p, 'down', 0);
+  st.downs++;
   w.events.push({ type: 'playerDown', player: p.index });
   if (!w.players.some(standing)) w.result = 'lose';
   return true;
@@ -473,7 +494,10 @@ function strike(w: World, p: Player, e: Enemy) {
   }
   const haymaker = e.kind === 'boss' && e.unblockable;
   const dmg = haymaker ? T.bossHaymaker.damage : T[e.kind].damage;
-  if (!hurtPlayer(w, p, dmg, e.pos, e.unblockable, 0.5)) { setPlayer(p, 'hitstun', 20); p.combo = 0; }
+  // A swing that could have been countered and wasn't.
+  if (!e.unblockable) w.stats[p.index].missedCounters++;
+  const source = haymaker ? 'the President\'s haymaker' : e.kind === 'boss' ? 'the President' : e.kind === 'heavy' ? 'heavy haymakers' : 'punches';
+  if (!hurtPlayer(w, p, dmg, e.pos, e.unblockable, 0.5, source)) { setPlayer(p, 'hitstun', 20); p.combo = 0; }
 }
 
 // Choose the next swing, set its wind-up and whether it can be countered.
@@ -581,12 +605,12 @@ function stepEnemies(w: World) {
         e.facing = toN;
         if (p.state !== 'grabbed') { setEnemy(e, 'recover', k.recovery); break; }
         p.pos = { x: e.pos.x + e.facing.x * 0.8, y: e.pos.y + e.facing.y * 0.8 };
-        if (e.t % T.grab.tick === 0 && hurtPlayer(w, p, k.damage, e.pos, false, 0)) break;
+        if (e.t % T.grab.tick === 0 && hurtPlayer(w, p, k.damage, e.pos, false, 0, 'grapplers')) break;
         if (e.t >= e.dur) {
           // Throw them.
           setPlayer(p, 'hitstun', 30);
           p.pos = { x: e.pos.x + e.facing.x * 2, y: e.pos.y + e.facing.y * 2 };
-          hurtPlayer(w, p, T.grab.throwDamage, e.pos, true, 0);
+          hurtPlayer(w, p, T.grab.throwDamage, e.pos, true, 0, 'grapplers');
           setEnemy(e, 'recover', k.recovery);
         }
         break;
@@ -625,7 +649,7 @@ function stepCups(w: World) {
     if (c.owner === -1) {
       const p = w.players.find(p => !playerInvulnerable(p) && dist(p.pos, c.pos) < T.cup.hitRadius);
       if (p) {
-        if (!hurtPlayer(w, p, T.thrower.damage, c.pos, false, 0.3) && p.state !== 'grabbed') { setPlayer(p, 'hitstun', 16); p.combo = 0; }
+        if (!hurtPlayer(w, p, T.thrower.damage, c.pos, false, 0.3, 'red cups') && p.state !== 'grabbed') { setPlayer(p, 'hitstun', 16); p.combo = 0; }
         w.events.push({ type: 'shatter', pos: { ...c.pos } });
         return false;
       }
@@ -678,7 +702,8 @@ function slams(w: World) {
       e.slammed = true;
       e.vel = { x: 0, y: 0 };
       e.hp -= T.slam.damage;
-      if (e.hp <= 0) { e.hp = 0; setEnemy(e, 'dead', 0); w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' }); }
+      if (e.lastHitBy >= 0) w.stats[e.lastHitBy].slams++;
+      if (e.hp <= 0) { e.hp = 0; setEnemy(e, 'dead', 0); if (e.lastHitBy >= 0) w.stats[e.lastHitBy].kos++; w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' }); }
       else e.dur += T.slam.extraDown;
       w.hitstop = T.hitstop.heavy; w.shake = 0.4;
       w.events.push({ type: 'slam', pos: { ...e.pos } });

@@ -1,7 +1,7 @@
 // Draws a World. Reads sim state only; never changes it.
 import * as THREE from 'three';
 import { TUNING as T, EnemyKind } from './sim/tuning';
-import { World, Enemy, Player, GameEvent, Vec, counterable, deflectable, framesToStrike } from './sim/world';
+import { World, Enemy, Player, GameEvent, Vec, counterable, counterWindow, deflectable, framesToStrike } from './sim/world';
 import { buildKilroys } from './scene/kilroys';
 import { buildInterior } from './scene/interior';
 import { LEVELS } from './sim/level';
@@ -56,6 +56,27 @@ export class Renderer {
   private bossBar: HTMLDivElement | null = null;
   private stages: THREE.Group[] = [];
   private shown = -1;
+  private punchUntil = 0;
+  private punchMs = 1;
+  private punchAt: Vec = { x: 0, y: 0 };
+
+  // Camera push-in on a knockout, for the slow-motion finisher.
+  punch(at: Vec, ms: number) { this.punchAt = { ...at }; this.punchMs = ms; this.punchUntil = performance.now() + ms; }
+
+  // 0 = full quality, 1 = no shadows at native resolution, 2 = no shadows at reduced resolution.
+  quality = 0;
+  setQuality(q: number) {
+    if (q === this.quality) return;
+    this.quality = q;
+    this.renderer.setPixelRatio(q === 0 ? Math.min(devicePixelRatio, 2) : q === 1 ? 1 : 0.7);
+    this.renderer.shadowMap.enabled = q === 0;
+    this.scene.traverse(o => {
+      if (o instanceof THREE.Mesh) {
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
+      }
+    });
+    this.resize();
+  }
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
   private ragdolls = new Map<string, Ragdoll>();
@@ -169,7 +190,7 @@ export class Renderer {
     f.apply(this.blender(key).next(e.state, target, e.state === 'active' || e.state === 'down' || e.state === 'dead'));
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
-    if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
+    if (strike !== null && strike <= counterWindow(w)) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
     if (e.state === 'stun' && e.t < 4) { glow = 0.8; color = 0xffffff; }
     f.glow(color, glow);
   }
@@ -281,8 +302,8 @@ export class Renderer {
       const head = new THREE.Vector3(e.pos.x, 2.2 * SCALE[e.kind] + 0.1, e.pos.y).project(this.camera);
       const sx = (head.x * 0.5 + 0.5) * innerWidth, sy = (-head.y * 0.5 + 0.5) * innerHeight;
       const strike = framesToStrike(e);
-      const canCounter = w.players.some(p => counterable(p, e));
-      const mustDodge = e.unblockable && strike !== null && strike <= T.counter.window;
+      const canCounter = w.players.some(p => counterable(p, e, counterWindow(w)));
+      const mustDodge = e.unblockable && strike !== null && strike <= counterWindow(w);
       v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
       v.prompt.textContent = canCounter ? 'Y' : mustDodge ? 'A' : '';
       v.prompt.className = 'prompt' + (canCounter ? ' counter' : mustDodge ? ' dodge' : '');
@@ -369,10 +390,14 @@ export class Renderer {
 
     const up = w.players.filter(p => p.state !== 'down');
     const focus = (up.length ? up : w.players).reduce((a, p, _, all) => ({ x: a.x + p.pos.x / all.length, y: a.y + p.pos.y / all.length }), { x: 0, y: 0 });
-    this.camTarget.lerp(new THREE.Vector3(focus.x * 0.55, 0, focus.y * 0.35), 0.08);
-    const s = w.shake;
-    this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 10.5 + (Math.random() - 0.5) * s, this.camTarget.z + 12.5);
-    this.camera.lookAt(this.camTarget.x, 1.6, this.camTarget.z - 2.2);
+    // A finishing blow pulls the camera in on the knockout, then eases back out.
+    const now = performance.now();
+    const pk = this.punchUntil > now ? Math.sin(Math.min(1, (this.punchUntil - now) / this.punchMs) * Math.PI) : 0;
+    const aim = pk > 0 ? { x: focus.x + (this.punchAt.x - focus.x) * pk, y: focus.y + (this.punchAt.y - focus.y) * pk } : focus;
+    this.camTarget.lerp(new THREE.Vector3(aim.x * (0.55 + 0.45 * pk), 0, aim.y * (0.35 + 0.65 * pk)), pk > 0 ? 0.15 : 0.08);
+    const s = w.shake, zoom = 1 - 0.45 * pk;
+    this.camera.position.set(this.camTarget.x + (Math.random() - 0.5) * s, 1.6 + 8.9 * zoom + (Math.random() - 0.5) * s, this.camTarget.z + 12.5 * zoom);
+    this.camera.lookAt(this.camTarget.x, 1.6 - 0.6 * pk, this.camTarget.z - 2.2 * zoom);
     this.renderer.render(this.scene, this.camera);
   }
 }

@@ -7,6 +7,13 @@ stairs, the Polaroid wall); the exact floor plan isn't public, so placement is a
 
 Play: https://thccht-sudo.github.io/last-call/
 
+The title card shows the controls and picks Easy, Normal or Hard (enemy damage, counter window,
+enemy health). Esc or Start pauses: restart, music / sounds / voices volume, difficulty,
+graphics (auto drops shadows, then resolution, if the frame rate sags) and a frame-rate readout
+(F). First-time tips explain counters, dodges, cups, grabs, bottles and revives as they come up.
+After each fight a results screen shows per-player damage, knockouts, counters landed and
+missed, slams, and what hurt you most. The last knockout of each round plays in slow motion.
+
 Player 1 is Conrad, player 2 is George.
 
 Online: press O (or Select on a gamepad) to host. The game shows a link; send it to George.

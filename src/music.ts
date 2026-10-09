@@ -2,7 +2,15 @@
 // One looping track at a time, crossfaded. M toggles mute.
 export type Track = 'title' | 'fight' | 'boss';
 
-const VOLUME = 0.45, FADE_MS = 1200;
+let VOLUME = 0.45;
+const FADE_MS = 1200;
+
+// Music volume, 0..1, from the pause menu.
+export function setMusicVolume(v: number) {
+  VOLUME = 0.45 * v;
+  const a = current ? players.get(current) : undefined;
+  if (a && !muted) a.volume = VOLUME;
+}
 const players = new Map<Track, HTMLAudioElement>();
 let current: Track | null = null;
 let muted = false;

@@ -5,6 +5,15 @@ let ctx: AudioContext | null = null;
 let sfxBus: GainNode | null = null;
 let voiceBus: GainNode | null = null;
 const buffers = new Map<string, AudioBuffer | 'loading'>();
+let level = { sfx: 1, voice: 1 };
+
+// Sounds and voices volume, 0..1, from the pause menu. Ambience rides with sounds.
+export function setVolumes(v: { sfx: number; voice: number }) {
+  level = v;
+  if (sfxBus) sfxBus.gain.value = 0.8 * v.sfx;
+  if (voiceBus) voiceBus.gain.value = v.voice;
+  if (ambience) ambience.gain.gain.value = (ambience.name === 'club' ? 0.22 : 0.16) * v.sfx;
+}
 
 const SAMPLES = [
   ...[0, 1, 2, 3, 4, 5].map(i => `punch${i}`), ...[0, 1, 2, 3].map(i => `glass${i}`), 'street', 'club',
@@ -20,8 +29,8 @@ export const VOICE = {
 export function unlockAudio() {
   if (!ctx) {
     ctx = new AudioContext();
-    sfxBus = ctx.createGain(); sfxBus.gain.value = 0.8; sfxBus.connect(ctx.destination);
-    voiceBus = ctx.createGain(); voiceBus.gain.value = 1; voiceBus.connect(ctx.destination);
+    sfxBus = ctx.createGain(); sfxBus.gain.value = 0.8 * level.sfx; sfxBus.connect(ctx.destination);
+    voiceBus = ctx.createGain(); voiceBus.gain.value = level.voice; voiceBus.connect(ctx.destination);
     for (const name of [...SAMPLES, ...Object.values(VOICE).flat().map(v => `vo/${v}`)]) load(name);
   }
   if (ctx.state === 'suspended') ctx.resume();
@@ -112,7 +121,7 @@ export function ambient(name: 'street' | 'club') {
   if (ambience) { const old = ambience; old.gain.gain.setTargetAtTime(0, t, 0.5); old.src.stop(t + 3); }
   const src = ctx!.createBufferSource(); src.buffer = buf; src.loop = true;
   const gain = ctx!.createGain(); gain.gain.value = 0;
-  gain.gain.setTargetAtTime(name === 'club' ? 0.22 : 0.16, t, 0.8);
+  gain.gain.setTargetAtTime((name === 'club' ? 0.22 : 0.16) * level.sfx, t, 0.8);
   src.connect(gain).connect(ctx!.destination);
   src.start();
   ambience = { name, src, gain };

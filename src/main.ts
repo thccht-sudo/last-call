@@ -3,8 +3,9 @@ import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT } from './sim/
 import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
-import { sfx, unlockAudio, voice, VOICE, ambient } from './audio';
-import { playMusic, toggleMute } from './music';
+import { sfx, unlockAudio, voice, VOICE, ambient, setVolumes } from './audio';
+import { playMusic, toggleMute, setMusicVolume } from './music';
+import { loadSettings, saveSettings, Settings, showTitle, hideTitle, setTitleDifficulty, tips, openMenu, closeMenu, showResults, hideResults, Fps } from './ui';
 import { Host, Guest, roomFromUrl, joinLink, interpolated } from './net';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
@@ -16,8 +17,23 @@ const netPanel = document.querySelector<HTMLElement>('#net')!;
 
 const controls = new Controls();
 const renderer = new Renderer(canvas, overlay);
-let world: World = createWorld(Date.now());
+let settings: Settings = loadSettings();
+let world: World = createWorld(Date.now(), 1, settings.difficulty);
 let started = false;
+let paused = false;
+let slowUntil = 0; // real time until which the finisher runs in slow motion
+const fps = new Fps();
+
+function applySettings(s: Settings) {
+  settings = s;
+  saveSettings(s);
+  setMusicVolume(s.music);
+  setVolumes({ sfx: s.sfx, voice: s.voice });
+  if (s.quality === 'high') renderer.setQuality(0);
+  if (s.quality === 'low') renderer.setQuality(2);
+  document.getElementById('fps')!.hidden = !s.fps;
+}
+applySettings(settings);
 let bannerUntil = 0;
 let clock = 0; // local frame count, drives banner timing in every mode
 
@@ -32,7 +48,34 @@ addEventListener('pointerdown', () => { unlockAudio(); playMusic(started ? 'figh
 addEventListener('keydown', e => {
   unlockAudio();
   if (e.code === 'KeyM') say(toggleMute() ? 'MUSIC OFF' : 'MUSIC ON', 45);
+  if (e.code === 'KeyF') applySettings({ ...settings, fps: !settings.fps });
+  if (e.code === 'Escape' && started && world.result === 'playing') togglePause();
+  if (!started && !guest) {
+    const d = e.code === 'Digit1' ? 0 : e.code === 'Digit2' ? 1 : e.code === 'Digit3' ? 2
+      : e.code === 'ArrowLeft' ? settings.difficulty - 1 : e.code === 'ArrowRight' ? settings.difficulty + 1 : -9;
+    if (d >= 0 && d <= 2) chooseDifficulty(d);
+  }
 });
+document.getElementById('title')!.addEventListener('click', e => {
+  const d = (e.target as HTMLElement).dataset?.d;
+  if (d !== undefined) chooseDifficulty(Number(d));
+});
+
+function chooseDifficulty(d: number) {
+  applySettings({ ...settings, difficulty: d });
+  setTitleDifficulty(d);
+  world = createWorld(Date.now(), 1, d);
+}
+
+function togglePause() {
+  if (paused) { paused = false; closeMenu(); return; }
+  paused = !guest; // a guest can open the menu but can't stop the host's fight
+  openMenu(settings, host?.status === 'connected' ? 'host' : guest ? 'guest' : null, {
+    resume: () => { paused = false; closeMenu(); },
+    restart: () => { paused = false; closeMenu(); restart(); },
+    change: applySettings,
+  });
+}
 
 hud.innerHTML = CAST.map((c, i) => `
   <div class="pbar p${i + 1}" style="--c:${c.css}">
@@ -45,9 +88,8 @@ function say(text: string, frames = 0) {
   banner.style.opacity = text ? '1' : '0';
   bannerUntil = frames ? clock + frames : Infinity;
 }
-say(guest
-  ? `JOINING ${guest.code}<small>connecting to ${CAST[0].name}'s game…</small>`
-  : 'LAST CALL<small>click the game, then press Start / Enter · O (or Select) plays online · M mutes music</small>');
+if (guest) say(`JOINING ${guest.code}<small>connecting to ${CAST[0].name}'s game…</small>`);
+else showTitle(settings, false);
 
 function showNet(html: string) { netPanel.innerHTML = html; netPanel.hidden = !html; }
 
@@ -107,10 +149,20 @@ let lastResult = '';
 function showResult(w: World) {
   if (w.result === lastResult) return;
   lastResult = w.result;
-  if (w.result !== 'playing') playMusic('title');
+  if (w.result === 'playing') { hideResults(); return; }
+  playMusic('title');
   if (w.result === 'win') voice(VOICE.win, { interrupt: true });
-  if (w.result === 'win') say("LAST CALL<small>Kilroy's is yours · Start / Enter to go again</small>");
-  if (w.result === 'lose') say('KNOCKED OUT<small>Start / Enter to try again</small>');
+  say('');
+  showResults(w);
+}
+
+// The last knockout of a round (and the President's) plays in slow motion with the camera in close.
+function finisher(events: GameEvent[], w: World) {
+  const ko = events.find(e => e.type === 'ko');
+  if (!ko || ko.type !== 'ko') return;
+  if (!ko.boss && w.enemies.some(e => e.state !== 'dead')) return;
+  slowUntil = performance.now() + 1400;
+  renderer.punch(ko.pos, 1400);
 }
 
 // Voice cues that come from state changes rather than events: frats taunt as they step in,
@@ -132,7 +184,9 @@ function guestTick() {
   const g = guest!;
   const samples = controls.poll();
   if (!controls.slots.length) { const dev = controls.joiner(samples); if (dev) controls.slots = [dev]; }
-  g.sendInput(controls.inputFor(0, samples), controls.startPressed(samples));
+  const start = controls.startPressed(samples);
+  g.sendInput(controls.inputFor(0, samples), start);
+  if (start && started && world.result === 'playing') togglePause();
   if (g.status !== lastLinkStatus) {
     lastLinkStatus = g.status;
     if (g.status === 'connected') { started = true; say('CONNECTED<small>you are George · press any button</small>', 120); playMusic('fight'); }
@@ -144,7 +198,9 @@ function guestTick() {
     if (w.frame < world.frame - 30) renderer.clear(); // host restarted the fight
     world = w;
     renderer.events(g.events);
-    react(g.takeEvents(), w);
+    const evs = g.takeEvents();
+    react(evs, w);
+    finisher(evs, w);
     watch(w);
     showResult(w);
   }
@@ -153,11 +209,18 @@ function guestTick() {
 function hostTick() {
   const samples = controls.poll();
   if (!started) {
+    // On the title card: left/right on a pad picks difficulty; anything else starts.
+    for (const smp of samples.values()) {
+      if (Math.abs(smp.input.mx) > 0.6 && !stickHeld) { stickHeld = true; chooseDifficulty(Math.max(0, Math.min(2, settings.difficulty + Math.sign(smp.input.mx)))); }
+    }
+    if (![...samples.values()].some(smp => Math.abs(smp.input.mx) > 0.3)) stickHeld = false;
     const dev = controls.joiner(samples);
-    if (controls.onlinePressed(samples)) { startHosting(); started = true; controls.slots = [dev ?? 'kb1']; say(''); playMusic('fight'); return; }
-    if (dev) { controls.slots = [dev]; started = true; unlockAudio(); say(''); playMusic('fight'); }
+    if (controls.onlinePressed(samples)) { startHosting(); begin(dev ?? 'kb1'); return; }
+    if (dev) begin(dev);
     return;
   }
+  if (world.result === 'playing' && controls.startPressed(samples)) togglePause();
+  if (paused) { host?.snapshot(world); return; }
   if (!host && controls.onlinePressed(samples) && world.players.length < 2) startHosting();
   const remote = host?.input() ?? { input: NO_INPUT, start: false };
 
@@ -183,23 +246,38 @@ function hostTick() {
     const dev = controls.joiner(samples);
     if (dev) { controls.slots.push(dev); addPlayer(world); }
   }
-  if (world.result !== 'playing' && (controls.startPressed(samples) || remote.start)) {
-    world = createWorld(Date.now(), online ? 2 : controls.slots.length);
-    renderer.clear();
-    playMusic('fight');
-    lastResult = '';
-    say('');
-    host?.snapshot(world);
-    return;
-  }
+  if (world.result !== 'playing' && (controls.startPressed(samples) || remote.start)) { restart(); return; }
   const inputs = world.players.map((_, i) => i === 1 && online ? remote.input : controls.inputFor(i, samples));
   step(world, inputs);
   renderer.events(world.events);
   react(world.events, world);
+  finisher(world.events, world);
   watch(world);
   host?.queue(world.events);
   if (world.frame % 2 === 0) host?.snapshot(world);
   showResult(world);
+}
+
+let stickHeld = false;
+
+function begin(dev: Parameters<typeof controls.slots.push>[0]) {
+  controls.slots = [dev];
+  started = true;
+  unlockAudio();
+  hideTitle();
+  say('');
+  playMusic('fight');
+}
+
+function restart() {
+  const online = host?.status === 'connected';
+  world = createWorld(Date.now(), online ? 2 : Math.max(1, controls.slots.length), settings.difficulty);
+  renderer.clear();
+  playMusic('fight');
+  lastResult = '';
+  hideResults();
+  say('');
+  host?.snapshot(world);
 }
 
 function tick() {
@@ -210,9 +288,17 @@ function tick() {
 
 const DT = 1000 / T.fps;
 let acc = 0, last = performance.now();
+let qualityCheckedAt = 0;
 function frame(now: number) {
-  acc += Math.min(100, now - last);
+  // Slow motion: the simulation runs at a quarter speed for the finisher.
+  acc += Math.min(100, now - last) * (now < slowUntil ? 0.25 : 1);
   last = now;
+  // Automatic quality: if the frame rate sags during a fight, drop shadows, then resolution.
+  if (fps.tick(settings.fps) && started && settings.quality === 'auto' && fps.value < 48 && now - qualityCheckedAt > 3000 && renderer.quality < 2) {
+    qualityCheckedAt = now;
+    renderer.setQuality(renderer.quality + 1);
+  }
+  if (started && world.result === 'playing' && !paused) tips(world, controls.isPad(0));
   while (acc >= DT) { tick(); acc -= DT; }
   bars.forEach((bar, i) => {
     const p = world.players[i];
@@ -233,6 +319,6 @@ requestAnimationFrame(frame);
 
 // For automated checks and console tinkering.
 (window as unknown as { game: object }).game = {
-  get world() { return world; }, T, controls,
+  get world() { return world; }, T, controls, renderer, get paused() { return paused; },
   get net() { return host ? { role: 'host', code: host.code, status: host.status } : guest ? { role: 'guest', status: guest.status, snaps: guest.snaps.length } : null; },
 };

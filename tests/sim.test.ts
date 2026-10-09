@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable } from '../src/sim/world';
+import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable, counterWindow } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
 import { insideObstacle } from '../src/sim/level';
 import type { EnemyKind } from '../src/sim/tuning';
@@ -345,5 +345,38 @@ describe('inside the bar', () => {
     expect(w.enemies.some(e => e.kind === 'boss')).toBe(true);
     for (const p of w.players) expect(p.pos.y).toBeGreaterThan(1.5);
     expect(w.bottles.length).toBe(2);
+  });
+});
+
+describe('difficulty and stats', () => {
+  it('easy takes less damage and gives a longer counter window than hard', () => {
+    const hits = [0, 2].map(d => {
+      const w = createWorld(7, 1, d);
+      w.wave = 0; w.waveTimer = 1e9;
+      w.players[0].pos = { x: 0, y: 2 };
+      const e = spawnEnemy(w, 'thug', { x: 0, y: 0.8 }, 'circle');
+      untilStrikeIn(w, e, 0);
+      run(w, 30);
+      return T.player.hp - w.players[0].hp;
+    });
+    expect(hits[0]).toBeLessThan(hits[1]);
+    const easy = createWorld(1, 1, 0), hard = createWorld(1, 1, 2);
+    expect(counterWindow(easy)).toBeGreaterThan(counterWindow(hard));
+  });
+
+  it('records counters, missed counters and damage taken by source', () => {
+    const { w, e } = duel();
+    untilStrikeIn(w, e, 10);
+    step(w, press({ counter: true }));
+    run(w, 200);
+    const s = w.stats[0];
+    expect(s.counters).toBe(1);
+    expect(s.dealt).toBeGreaterThan(0);
+    // Let the next swing land.
+    const e2 = spawnEnemy(w, 'thug', { x: 0, y: 1.2 }, 'circle');
+    untilStrikeIn(w, e2, 0);
+    run(w, 30);
+    expect(s.missedCounters).toBeGreaterThan(0);
+    expect(s.takenBy.punches).toBeGreaterThan(0);
   });
 });

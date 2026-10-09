@@ -70,6 +70,13 @@ export const TUNING = {
   ] as { stage: number; maxAttackers: number; enemies: EnemyKind[] }[],
   waveDelay: 90,
 
+  // Difficulty scales enemy damage, the counter window and enemy health.
+  difficulty: [
+    { name: 'EASY', damage: 0.6, window: 1.4, enemyHp: 0.8 },
+    { name: 'NORMAL', damage: 1, window: 1, enemyHp: 1 },
+    { name: 'HARD', damage: 1.35, window: 0.75, enemyHp: 1.2 },
+  ],
+
   coop: { extraPerWave: 1, reviveRange: 1.3, reviveFrames: 120, reviveHp: 40, tagWindow: 45, tagMultiplier: 1.5 },
 } as const;
 
