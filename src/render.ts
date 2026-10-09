@@ -6,8 +6,9 @@ import { buildKilroys } from './scene/kilroys';
 import { buildInterior } from './scene/interior';
 import { LEVELS } from './sim/level';
 import { Figure, Look } from './figure';
-import { CLIPS } from './anim/pose';
+import { CLIPS, Pose, mix } from './anim/pose';
 import { playerPose, enemyPose, Blender, Motion } from './anim/moves';
+import { Ragdoll, Props } from './physics';
 
 
 // From their photos. Player 1 is Conrad (6'5"): black collared work shirt, tousled brown hair,
@@ -57,6 +58,10 @@ export class Renderer {
   private shown = -1;
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
+  private ragdolls = new Map<string, Ragdoll>();
+  private restPose = new Map<string, Pose>();
+  private risingT = new Map<string, number>();
+  private props: Props[] = [];
   private moves = new Map<string, { last: Vec; distance: number; speed: number }>();
   private blenders = new Map<string, Blender>();
   private overlay: HTMLElement;
@@ -72,6 +77,7 @@ export class Renderer {
       const g = new THREE.Group();
       build(g);
       this.stages.push(g);
+      this.props.push(new Props(g.userData.props ?? []));
       this.scene.add(g);
     }
 
@@ -91,6 +97,8 @@ export class Renderer {
     let m = this.moves.get(key);
     if (!m) { m = { last: { ...pos }, distance: 0, speed: 0 }; this.moves.set(key, m); }
     const d = Math.hypot(pos.x - m.last.x, pos.y - m.last.y);
+    // Walking bodies shove loose props along.
+    if (d > 1e-3 && d < 0.5) this.props[this.shown]?.nudge(pos, { x: pos.x - m.last.x, y: pos.y - m.last.y });
     m.last = { ...pos };
     m.distance += d;
     m.speed += (Math.min(1, d / (topSpeed / 60)) - m.speed) * 0.25;
@@ -103,18 +111,62 @@ export class Renderer {
     return b;
   }
 
+  // A fighter on the floor is a ragdoll, launched from whatever pose they were in when they
+  // went down. Getting up eases from where the ragdoll came to rest back to the guard.
+  private ragdollPose(key: string, f: Figure, w: World, anchor: Vec, launch: THREE.Vector3): Pose {
+    let rag = this.ragdolls.get(key);
+    f.root.updateMatrixWorld(true);
+    if (!rag) {
+      const from = this.blender(key).last ?? CLIPS.guard.frames[0];
+      const world = Array.from({ length: from.length / 3 }, (_, i) => new THREE.Vector3(from[i * 3], from[i * 3 + 1], from[i * 3 + 2]).applyMatrix4(f.root.matrixWorld));
+      rag = new Ragdoll(world, launch, 3);
+      this.ragdolls.set(key, rag);
+    }
+    rag.step(LEVELS[w.stage].obstacles, anchor);
+    const pose = rag.toLocal(f.root);
+    this.restPose.set(key, pose);
+    return pose;
+  }
+
+  private rising(key: string, target: Pose, u: number): Pose {
+    this.ragdolls.delete(key);
+    const rest = this.restPose.get(key);
+    return rest ? mix(rest, target, Math.min(1, u * u * 1.4)) : target;
+  }
+
   private posePlayer(p: Player, f: Figure, w: World) {
+    const key = `p${p.index}`;
     f.place(p.pos, p.facing);
-    const target = playerPose(p, w, this.motion(`p${p.index}`, p.pos, T.player.speed));
+    let target = playerPose(p, w, this.motion(key, p.pos, T.player.speed));
+    if (p.state === 'down') {
+      target = this.ragdollPose(key, f, w, p.pos, new THREE.Vector3(-p.facing.x * 2, 2, -p.facing.y * 2));
+    } else if (this.ragdolls.has(key) || this.restPose.has(key)) {
+      // Just revived: stand up out of the ragdoll over a third of a second.
+      const k = (this.risingT.get(key) ?? 0) + 1;
+      this.risingT.set(key, k);
+      target = this.rising(key, target, k / 20);
+      if (k >= 20) { this.restPose.delete(key); this.risingT.delete(key); }
+    }
     const contact = p.state === 'attack' || p.state === 'counter';
-    f.apply(this.blender(`p${p.index}`).next(`${p.state}:${p.combo}:${p.smash}`, target, contact));
+    f.apply(this.blender(key).next(`${p.state}:${p.combo}:${p.smash}`, target, contact || p.state === 'down'));
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
   }
 
   private poseEnemy(e: Enemy, f: Figure, w: World) {
+    const key = `e${e.id}`;
     f.place(e.pos, e.facing);
-    const target = enemyPose(e, w, this.motion(`e${e.id}`, e.pos, T[e.kind].speed));
-    f.apply(this.blender(`e${e.id}`).next(e.state, target, e.state === 'active' || e.state === 'down'));
+    let target = enemyPose(e, w, this.motion(key, e.pos, T[e.kind].speed));
+    if (e.state === 'down' || e.state === 'dead') {
+      // Launch speed from the knockback the simulation gave them: harder hits fly higher.
+      const v = Math.hypot(e.vel.x, e.vel.y) * 60;
+      const dir = v > 0.1 ? { x: e.vel.x * 60 / v, y: e.vel.y * 60 / v } : { x: -e.facing.x, y: -e.facing.y };
+      const heavy = e.kind === 'heavy' || e.kind === 'boss' ? 0.6 : 1;
+      const launch = new THREE.Vector3(dir.x * Math.min(7, 1.5 + v * 0.35) * heavy, Math.min(5.5, 1.6 + v * 0.22) * heavy, dir.y * Math.min(7, 1.5 + v * 0.35) * heavy);
+      target = this.ragdollPose(key, f, w, e.pos, launch);
+    } else if (e.state === 'getup') {
+      target = this.rising(key, target, e.t / Math.max(1, e.dur));
+    } else this.restPose.delete(key);
+    f.apply(this.blender(key).next(e.state, target, e.state === 'active' || e.state === 'down' || e.state === 'dead'));
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
     if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
@@ -143,6 +195,8 @@ export class Renderer {
     for (const v of this.enemies.values()) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); }
     this.enemies.clear();
     this.moves.clear(); this.blenders.clear();
+    this.ragdolls.clear(); this.restPose.clear(); this.risingT.clear();
+    for (const p of this.props) p.reset();
     for (const v of this.cups.values()) { this.scene.remove(v.mesh); v.prompt.remove(); }
     this.cups.clear();
     this.bossBar?.remove(); this.bossBar = null;
@@ -163,7 +217,13 @@ export class Renderer {
   }
 
   events(evts: GameEvent[]) {
+    const props = this.props[this.shown];
     for (const ev of evts) {
+      // Impacts scatter nearby props.
+      if (ev.type === 'slam') props?.blast(ev.pos, 1.8, 5);
+      if (ev.type === 'ko') props?.blast(ev.pos, 1.4, 3.5);
+      if (ev.type === 'hit' && ev.heavy) props?.blast(ev.pos, 1.0, 2);
+      if (ev.type === 'shatter') props?.blast(ev.pos, 0.8, 1.5);
       if (ev.type === 'hit') this.burst(ev.pos, 0xffffff, ev.heavy ? 0.35 : 0.22, ev.heavy ? 10 : 7);
       if (ev.type === 'counter') this.burst(ev.pos, 0xffd23f, 0.45, 12);
       if (ev.type === 'playerHit') this.burst(ev.pos, 0xff4040, 0.3, 9);
@@ -175,6 +235,7 @@ export class Renderer {
   }
 
   draw(w: World) {
+    this.props[w.stage]?.step(LEVELS[w.stage].obstacles);
     if (w.stage !== this.shown) {
       this.shown = w.stage;
       this.stages.forEach((g, i) => { g.visible = i === w.stage; });

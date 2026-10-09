@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { INSIDE } from '../sim/level';
 import { canvasTex, brickTex, rnd } from './kilroys';
+import { makeProp, Prop } from '../physics';
 
 const plankTex = () => canvasTex(256, 256, g => {
   for (let row = 0; row < 8; row++) {
@@ -61,6 +62,17 @@ export function buildInterior(root: THREE.Group) {
   const box = (sx: number, sy: number, sz: number, m: THREE.Material, x: number, y: number, z: number, shadow = true) =>
     add(new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m), x, y, z, shadow);
   const W = maxX - minX + 1, D = maxY - minY + 3;
+  // Loose things the renderer's prop physics can knock about.
+  const props: Prop[] = [];
+  root.userData.props = props;
+  const stool = (x: number, z: number) => {
+    const g = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.06, 12), std({ color: 0x7a1010 })); seat.position.y = 0.36;
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.7, 6), std({ color: 0x141414 }));
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.03, 10), std({ color: 0x141414 })); foot.position.y = -0.35;
+    g.add(seat, leg, foot);
+    props.push(makeProp(add(g, x, 0.37, z), 0.35, 2));
+  };
 
   // Light: dim warm room, red pendants over the bar, a coloured wash on the dance floor.
   root.add(new THREE.HemisphereLight(0xffe2c4, 0x2a1a12, 0.8));
@@ -106,10 +118,7 @@ export function buildInterior(root: THREE.Group) {
   }
   // Stools along the bar.
   for (let z = bar.y - bar.h / 2 + 0.5; z < bar.y + bar.h / 2; z += 1.1) {
-    const stool = new THREE.Group();
-    stool.add(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.06, 12), std({ color: 0x7a1010 })));
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.7, 6), black); leg.position.y = -0.36; stool.add(leg);
-    add(stool, bar.x + 0.75, 0.74, z);
+    stool(bar.x + 0.75, z);
   }
   // Red pendant lights over the bar.
   for (let z = bar.y - bar.h / 2 + 0.6; z < bar.y + bar.h / 2; z += 1.4) {
@@ -126,13 +135,10 @@ export function buildInterior(root: THREE.Group) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.05, 8), black); post.position.y = 0.52;
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.04, 12), black); base.position.y = 0.02;
     t.add(topDisc, post, base);
-    for (const s of [-1, 1]) {
-      const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.05, 10), std({ color: 0x7a1010 }));
-      seat.position.set(s * 0.6, 0.74, 0.1); t.add(seat);
-    }
     add(t, o.x, 0, o.y);
+    for (const s of [-1, 1]) stool(o.x + s * 0.65, o.y + 0.1);
     // A drink on every table.
-    add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.14, 8), std({ color: 0xc8191e })), o.x + 0.1, 1.15, o.y - 0.05, false);
+    props.push(makeProp(add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.14, 8), std({ color: 0xc8191e })), o.x + 0.1, 1.15, o.y - 0.05), 0.08, 0.3));
   }
 
   // Elevated booths along the east wall: a riser, a U-shaped bench, a table.

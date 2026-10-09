@@ -5,6 +5,7 @@
 // brick sidewalk with a green lamppost and a double parking meter, then Kirkwood Avenue.
 import * as THREE from 'three';
 import { LEVEL } from '../sim/level';
+import { makeProp, Prop } from '../physics';
 
 export function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void, repeat?: [number, number]) {
   const c = document.createElement('canvas');
@@ -262,6 +263,32 @@ export function buildKilroys(scene: THREE.Group) {
   globe.position.set(lamp.x, 4.6, lamp.y); scene.add(globe);
   box(0.06, 1.1, 0.06, std({ color: 0x777a7d, metalness: 0.7 }), meter.x, 0.55, meter.y);
   for (const s of [-1, 1]) box(0.16, 0.36, 0.14, std({ color: 0x3a3d42, metalness: 0.6 }), meter.x + s * 0.11, 1.25, meter.y);
+  // Loose things the renderer's prop physics can knock about: cans and cups on the picnic
+  // tables, a trash can and a traffic cone on the sidewalk.
+  const props: Prop[] = [];
+  scene.userData.props = props;
+  const loose = (mesh: THREE.Object3D, x: number, y: number, z: number, r: number, mass: number) => {
+    mesh.position.set(x, y, z);
+    mesh.traverse(c => { if (c instanceof THREE.Mesh) c.castShadow = true; });
+    scene.add(mesh);
+    props.push(makeProp(mesh, r, mass));
+  };
+  LEVEL.obstacles.filter(o => o.kind === 'table').forEach((o, i) => {
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.12, 10), std({ color: i % 2 ? 0xc0c4c8 : 0x2a5ad0, metalness: 0.7, roughness: 0.3 }));
+    loose(can, o.x - 0.35, 0.86, o.y - 0.1, 0.07, 0.3);
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.037, 0.12, 10), std({ color: 0xc8191e }));
+    loose(cup, o.x + 0.4, 0.86, o.y + 0.15, 0.07, 0.2);
+  });
+  const bin = new THREE.Group();
+  bin.add(new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.85, 14), std({ color: 0x24402e, metalness: 0.3 })));
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.06, 14), std({ color: 0x1a2e20 })); lid.position.y = 0.45; bin.add(lid);
+  loose(bin, -1.6, 0.43, 2.25, 0.3, 3);
+  const cone = new THREE.Group();
+  const coneBody = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.55, 12), std({ color: 0xff6a10 })); coneBody.position.y = 0.05;
+  const coneBase = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 0.36), std({ color: 0xff6a10 })); coneBase.position.y = -0.22;
+  cone.add(coneBody, coneBase);
+  loose(cone, 5.4, 0.24, 2.3, 0.25, 1);
+
   // Street trees beyond the play area.
   for (const x of [minX - 1.6, maxX + 1.6]) {
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 3, 8), std({ color: 0x3a2a20 }));

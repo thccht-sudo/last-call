@@ -194,6 +194,7 @@ export function enemyPose(e: Enemy, w: World, m: Motion): Pose {
 // Short crossfades between states so nothing pops, except into a strike's contact frame.
 export class Blender {
   private prev: Pose | null = null;
+  get last() { return this.prev; }
   private from: Pose | null = null;
   private state = '';
   private t = 0;

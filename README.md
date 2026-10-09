@@ -49,6 +49,12 @@ procedural poses built with IK. `npm run dev` then open `/strip.html?move=jab` (
 dodge, haymaker, grapple, knockdown...) to see any move as a row of stills.
 `tools/bake-mocap.mjs` re-bakes the clips listed in `tools/mocap-clips.txt`.
 
+Physics: the fight runs on a flat, deterministic 60 Hz simulation (circles, knockback, slams
+into obstacles). On top of that, purely for looks, `src/physics.ts` turns anyone knocked down
+into a Verlet ragdoll launched along the hit (harder hits fly higher) that tumbles, drapes and
+slumps against tables, the fence and the bar, and scatters loose props: stools, cans, cups, a
+trash can and a traffic cone. Each browser runs its own copy, so it never affects the fight.
+
 `npm install && npm run dev` to run locally. After each deploy CI plays the live site with
 `tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,
 including a bot that has to clear the bar. All feel numbers live in `src/sim/tuning.ts`; the
