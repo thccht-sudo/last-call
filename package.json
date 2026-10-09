@@ -9,10 +9,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "peerjs": "^1.5.5",
     "three": "0.180.0"
   },
   "devDependencies": {
     "@types/three": "0.180.0",
+    "peer": "^1.0.2",
     "playwright": "^1.56.1",
     "typescript": "5.9.3",
     "vite": "7.1.12",

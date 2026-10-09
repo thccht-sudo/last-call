@@ -33,3 +33,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b20; col
 .bossbar i { display: block; height: 100%; background: #8a5bd6; transition: width 150ms; }
 .bossbar.enraged div { border-color: #e23b3b; }
 .bossbar.enraged i { background: #e23b3b; }
+#net { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 8px 12px;
+  background: #000c; border: 1px solid #ffffff30; border-radius: 6px; font-size: 13px; text-align: center; }
+#net input { width: min(340px, 60vw); font: inherit; background: #111; color: #eee; border: 1px solid #555; padding: 3px 6px; }
+#net button { font: inherit; padding: 3px 10px; cursor: pointer; }

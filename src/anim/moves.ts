@@ -58,7 +58,11 @@ export interface Motion { distance: number; speed: number }
 export function playerPose(p: Player, w: World, m: Motion): Pose {
   const time = w.frame;
   switch (p.state) {
-    case 'free': return locomotion(CLIPS.run, m.distance, m.speed, time, 2.6);
+    case 'free': {
+      // Conrad runs proud, George runs active; both cover about 2.8 m per stride cycle.
+      const clip = p.index === 0 ? CLIPS.runProud : CLIPS.runActive;
+      return locomotion(clip, m.distance, m.speed, time, 2.8 / clip.stride);
+    }
     case 'attack': {
       if (p.smash) { const s = T.combo[2]; return strike('slash', p.t, s.startup, s.active, s.recovery, time, Math.max(0, KEYS.slash - 14)); }
       // A bottle throw is a short attack that starts already marked as landed.

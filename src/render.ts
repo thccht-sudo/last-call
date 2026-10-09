@@ -54,8 +54,8 @@ export class Renderer {
   private bossBar: HTMLDivElement | null = null;
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
-  private moves = new Map<object, { last: Vec; distance: number; speed: number }>();
-  private blenders = new Map<object, Blender>();
+  private moves = new Map<string, { last: Vec; distance: number; speed: number }>();
+  private blenders = new Map<string, Blender>();
   private overlay: HTMLElement;
 
   constructor(canvas: HTMLCanvasElement, overlay: HTMLElement) {
@@ -78,7 +78,7 @@ export class Renderer {
   }
 
   // Distance walked and current speed per character, for stepping the gait cycles.
-  private motion(key: object, pos: Vec, topSpeed: number): Motion {
+  private motion(key: string, pos: Vec, topSpeed: number): Motion {
     let m = this.moves.get(key);
     if (!m) { m = { last: { ...pos }, distance: 0, speed: 0 }; this.moves.set(key, m); }
     const d = Math.hypot(pos.x - m.last.x, pos.y - m.last.y);
@@ -88,7 +88,7 @@ export class Renderer {
     return m;
   }
 
-  private blender(key: object) {
+  private blender(key: string) {
     let b = this.blenders.get(key);
     if (!b) { b = new Blender(); this.blenders.set(key, b); }
     return b;
@@ -96,16 +96,16 @@ export class Renderer {
 
   private posePlayer(p: Player, f: Figure, w: World) {
     f.place(p.pos, p.facing);
-    const target = playerPose(p, w, this.motion(p, p.pos, T.player.speed));
+    const target = playerPose(p, w, this.motion(`p${p.index}`, p.pos, T.player.speed));
     const contact = p.state === 'attack' || p.state === 'counter';
-    f.apply(this.blender(p).next(`${p.state}:${p.combo}:${p.smash}`, target, contact));
+    f.apply(this.blender(`p${p.index}`).next(`${p.state}:${p.combo}:${p.smash}`, target, contact));
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
   }
 
   private poseEnemy(e: Enemy, f: Figure, w: World) {
     f.place(e.pos, e.facing);
-    const target = enemyPose(e, w, this.motion(e, e.pos, T[e.kind].speed));
-    f.apply(this.blender(e).next(e.state, target, e.state === 'active' || e.state === 'down'));
+    const target = enemyPose(e, w, this.motion(`e${e.id}`, e.pos, T[e.kind].speed));
+    f.apply(this.blender(`e${e.id}`).next(e.state, target, e.state === 'active' || e.state === 'down'));
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
     if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
@@ -133,6 +133,7 @@ export class Renderer {
   clear() {
     for (const v of this.enemies.values()) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); }
     this.enemies.clear();
+    this.moves.clear(); this.blenders.clear();
     for (const v of this.cups.values()) { this.scene.remove(v.mesh); v.prompt.remove(); }
     this.cups.clear();
     this.bossBar?.remove(); this.bossBar = null;

@@ -4,21 +4,21 @@ import type { Input } from './sim/world';
 import { NO_INPUT } from './sim/world';
 
 // Standard gamepad: 0=A 1=B 2=X 3=Y 9=Start
-const PAD = { attack: 2, counter: 3, dodge: 0, grab: 1, start: 9 };
+const PAD = { attack: 2, counter: 3, dodge: 0, grab: 1, start: 9, online: 8 };
 const KEYMAPS = {
   kb1: {
     up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
-    attack: ['KeyJ'], counter: ['KeyK'], dodge: ['Space', 'KeyL'], grab: ['KeyE'], start: ['Enter'],
+    attack: ['KeyJ'], counter: ['KeyK'], dodge: ['Space', 'KeyL'], grab: ['KeyE'], start: ['Enter'], online: ['KeyO'],
   },
   kb2: {
     up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
-    attack: ['Numpad1', 'Comma'], counter: ['Numpad2', 'Period'], dodge: ['Numpad0', 'Slash'], grab: ['Numpad3', 'Quote'], start: ['NumpadEnter', 'Backslash'],
+    attack: ['Numpad1', 'Comma'], counter: ['Numpad2', 'Period'], dodge: ['Numpad0', 'Slash'], grab: ['Numpad3', 'Quote'], start: ['NumpadEnter', 'Backslash'], online: [] as string[],
   },
 };
 type KeyDevice = keyof typeof KEYMAPS;
 export type Device = KeyDevice | `pad${number}`;
 
-export interface Sample { input: Input; start: boolean; any: boolean }
+export interface Sample { input: Input; start: boolean; online: boolean; any: boolean }
 
 export class Controls {
   private down = new Set<string>();
@@ -49,8 +49,8 @@ export class Controls {
       my: (held(m.down) ? 1 : 0) - (held(m.up) ? 1 : 0),
       attack: hit(m.attack), counter: hit(m.counter), dodge: hit(m.dodge), grab: hit(m.grab),
     };
-    const start = hit(m.start);
-    return { input, start, any: start || input.attack || input.counter || input.dodge || input.grab };
+    const start = hit(m.start), online = hit(m.online);
+    return { input, start, online, any: start || input.attack || input.counter || input.dodge || input.grab };
   }
 
   private readPad(g: Gamepad): Sample {
@@ -62,8 +62,8 @@ export class Controls {
     if (Math.hypot(ax, ay) > 0.18) { mx = ax; my = ay; }
     if (b[12]) my = -1; if (b[13]) my = 1; if (b[14]) mx = -1; if (b[15]) mx = 1;
     const input: Input = { mx, my, attack: edge(PAD.attack), counter: edge(PAD.counter), dodge: edge(PAD.dodge), grab: edge(PAD.grab) };
-    const start = edge(PAD.start);
-    return { input, start, any: start || input.attack || input.counter || input.dodge || input.grab };
+    const start = edge(PAD.start), online = edge(PAD.online);
+    return { input, start, online, any: start || input.attack || input.counter || input.dodge || input.grab };
   }
 
   // Call once per sim frame. Returns one sample per device that exists right now.
@@ -88,6 +88,11 @@ export class Controls {
   inputFor(slot: number, samples: Map<Device, Sample>): Input {
     const dev = this.slots[slot];
     return (dev && samples.get(dev)?.input) || NO_INPUT;
+  }
+
+  onlinePressed(samples: Map<Device, Sample>): boolean {
+    for (const s of samples.values()) if (s.online) return true;
+    return false;
   }
 
   startPressed(samples: Map<Device, Sample>): boolean {

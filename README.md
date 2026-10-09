@@ -5,7 +5,14 @@ two waves, out front of Kilroy's on Kirkwood (502 E Kirkwood Ave, Bloomington) a
 
 Play: https://thccht-sudo.github.io/last-call/
 
-Player 1 is Conrad, player 2 is George. The first controller (or keyboard layout) to press a
+Player 1 is Conrad, player 2 is George.
+
+Online: press O (or Select on a gamepad) to host. The game shows a link; send it to George.
+Opening it joins as George from anywhere. Conrad's browser runs the fight and streams it to
+George's over a direct WebRTC connection; PeerJS's free public broker only introduces the two
+browsers. George's own moves arrive with the network delay between you.
+
+Local: The first controller (or keyboard layout) to press a
 button is Conrad; the next one to press anything joins as George, even mid-fight. Two players
 get one extra thug per wave. A downed player gets back up if their partner stands next to them
 for two seconds; the fight is lost only when both are down. Hitting an enemy your partner just
