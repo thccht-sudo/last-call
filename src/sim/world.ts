@@ -1,6 +1,6 @@
 // Deterministic fight simulation. No rendering, no clock: step() advances one 60 Hz frame.
 import { TUNING as T, EnemyKind } from './tuning';
-import { LEVEL, steer, collide, insideObstacle, clearLine } from './level';
+import { LEVEL, LEVELS, steer, collide, insideObstacle, clearLine, useStage, activeLevel } from './level';
 
 export interface Vec { x: number; y: number }
 
@@ -56,12 +56,13 @@ export type GameEvent =
   | { type: 'shatter'; pos: Vec }
   | { type: 'dodge'; by: number }
   | { type: 'wave'; n: number }
+  | { type: 'stage'; stage: number }
   | { type: 'ko'; pos: Vec; boss: boolean };
 
 export interface World {
   frame: number; hitstop: number; shake: number;
   players: Player[]; enemies: Enemy[]; bottles: Bottle[]; cups: Cup[];
-  wave: number; waveTimer: number; result: 'playing' | 'win' | 'lose';
+  stage: number; wave: number; waveTimer: number; result: 'playing' | 'win' | 'lose';
   events: GameEvent[]; rng: number; nextId: number;
 }
 
@@ -98,12 +99,11 @@ export function createWorld(seed = 1, playerCount = 1): World {
   const w: World = {
     frame: 0, hitstop: 0, shake: 0,
     players: [newPlayer(0, LEVEL.playerStart)],
-    enemies: [], bottles: [], cups: [], wave: -1, waveTimer: 30, result: 'playing',
+    enemies: [], bottles: [], cups: [], stage: 0, wave: -1, waveTimer: 30, result: 'playing',
     events: [], rng: seed >>> 0 || 1, nextId: 1,
   };
-  for (const home of LEVEL.bottleSpots) {
-    w.bottles.push({ id: w.nextId++, home, pos: { ...home }, vel: { x: 0, y: 0 }, state: 'ground', t: 0, holder: -1 });
-  }
+  useStage(0);
+  placeBottles(w);
   while (w.players.length < playerCount) addPlayer(w);
   w.events = [];
   return w;
@@ -121,12 +121,35 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
   return e;
 }
 
+function placeBottles(w: World) {
+  for (const p of w.players) p.holding = null;
+  w.bottles = LEVELS[w.stage].bottleSpots.map(home => ({ id: w.nextId++, home, pos: { ...home }, vel: { x: 0, y: 0 }, state: 'ground' as const, t: 0, holder: -1 }));
+}
+
+// Move the fight to another stage: everyone comes in the front door together.
+function enterStage(w: World, stage: number) {
+  w.stage = stage;
+  useStage(stage);
+  const start = LEVELS[stage].playerStart;
+  w.players.forEach((p, i) => {
+    p.pos = { x: start.x + (i - (w.players.length - 1) / 2) * 1.2, y: start.y };
+    p.facing = { x: 0, y: -1 };
+    if (p.state !== 'down') setPlayer(p, 'free', 0);
+  });
+  w.cups = [];
+  w.enemies = []; // everyone left outside is already down for good
+  placeBottles(w);
+  w.events.push({ type: 'stage', stage });
+}
+
 function startWave(w: World, n: number) {
+  if (T.waves[n].stage !== w.stage) enterStage(w, T.waves[n].stage);
   w.wave = n;
   w.events.push({ type: 'wave', n });
   const extra = Array.from({ length: (w.players.length - 1) * T.coop.extraPerWave }, () => 'thug' as const);
   [...T.waves[n].enemies, ...extra].forEach((kind, i) => {
-    const s = LEVEL.spawns[i % LEVEL.spawns.length];
+    const spawns = activeLevel().spawns;
+    const s = spawns[i % spawns.length];
     const e = spawnEnemy(w, kind, s.from, 'spawn', s.to);
     e.dur = 20 + i * 25;
   });
@@ -229,7 +252,7 @@ function enrage(w: World, e: Enemy) {
   w.events.push({ type: 'enrage', pos: { ...e.pos } });
   w.shake = 0.5;
   for (let i = 0; i < 2; i++) {
-    const s = LEVEL.spawns[1 + i];
+    const s = activeLevel().spawns[1 + i];
     const add = spawnEnemy(w, 'thug', s.from, 'spawn', s.to);
     add.dur = 20 + i * 30;
   }
@@ -592,7 +615,7 @@ function stepEnemies(w: World) {
 }
 
 function outOfBounds(p: Vec) {
-  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  const { minX, maxX, minY, maxY } = activeLevel().bounds;
   return p.x < minX || p.x > maxX || p.y < minY || p.y > maxY || insideObstacle(p, -0.05);
 }
 
@@ -646,7 +669,7 @@ function stepBottles(w: World) {
 // Enemies knocked flying hurt themselves on tables, the fence and the walls, and bowl over
 // anyone standing in their way.
 function slams(w: World) {
-  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  const { minX, maxX, minY, maxY } = activeLevel().bounds;
   for (const e of w.enemies) {
     if (e.state !== 'down' || e.slammed || len(e.vel) < T.slam.speed) continue;
     const r = T[e.kind].radius;
@@ -685,7 +708,7 @@ function separate(w: World) {
       b.pos.x += n.x * push * fb; b.pos.y += n.y * push * fb;
     }
   }
-  const { minX, maxX, minY, maxY } = LEVEL.bounds;
+  const { minX, maxX, minY, maxY } = activeLevel().bounds;
   const live = [
     ...w.players.map(p => ({ pos: p.pos, r: T.player.radius })),
     ...w.enemies.filter(e => e.state !== 'spawn' && e.state !== 'dead').map(e => ({ pos: e.pos, r: T[e.kind].radius })),
@@ -702,6 +725,7 @@ export function step(w: World, inputs: Input | Input[]): World {
   const ins = Array.isArray(inputs) ? inputs : [inputs];
   const inputFor = (p: Player) => ins[p.index] ?? NO_INPUT;
   w.events = [];
+  useStage(w.stage);
   w.frame++;
   w.shake *= 0.85;
   if (w.hitstop > 0) {

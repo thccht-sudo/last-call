@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { LEVEL } from '../sim/level';
 
-function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void, repeat?: [number, number]) {
+export function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void, repeat?: [number, number]) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   draw(c.getContext('2d')!);
@@ -19,9 +19,9 @@ function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => 
 
 // Small deterministic noise so textures look the same every load.
 let seed = 7;
-const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+export const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
-const brickTex = (repeat: [number, number]) => canvasTex(256, 256, g => {
+export const brickTex = (repeat: [number, number]) => canvasTex(256, 256, g => {
   g.fillStyle = '#5a4a40'; g.fillRect(0, 0, 256, 256);
   const bw = 64, bh = 21;
   for (let row = 0; row * bh < 256; row++) {
@@ -131,7 +131,8 @@ const interiorTex = () => canvasTex(1024, 256, g => {
   g.shadowColor = '#5bf0ff'; g.fillStyle = '#c8fbff'; g.font = 'italic 700 34px Georgia, serif'; g.fillText('Thanks for playing!', 120, 66);
 });
 
-export function buildKilroys(scene: THREE.Scene) {
+// Builds into a group; the renderer shows it while the fight is outside.
+export function buildKilroys(scene: THREE.Group) {
   const { minX, maxX } = LEVEL.bounds;
   const F = LEVEL.facadeY; // facade line in sim y == three z
   const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.85, ...o });
@@ -140,8 +141,6 @@ export function buildKilroys(scene: THREE.Scene) {
     m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; scene.add(m); return m;
   };
 
-  scene.background = new THREE.Color(0x0b0e1a);
-  scene.fog = new THREE.Fog(0x0b0e1a, 26, 48);
 
   // Light: moonlight for shadows, warm spill from the bar, the streetlamp, the awning bulbs.
   scene.add(new THREE.HemisphereLight(0x6a78b0, 0x2a1d18, 0.55));

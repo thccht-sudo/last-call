@@ -64,10 +64,10 @@ export const TUNING = {
   bottle: { speed: 0.3, damage: 25, meleeDamage: 30, pickup: 1.3, throwRange: 13, respawn: 480 },
 
   waves: [
-    { maxAttackers: 1, enemies: ['thug', 'thug', 'thug'] },
-    { maxAttackers: 2, enemies: ['thug', 'thrower', 'grappler', 'thug'] },
-    { maxAttackers: 2, enemies: ['boss', 'heavy', 'thrower'] },
-  ] as { maxAttackers: number; enemies: EnemyKind[] }[],
+    { stage: 0, maxAttackers: 1, enemies: ['thug', 'thug', 'thug'] },
+    { stage: 0, maxAttackers: 2, enemies: ['thug', 'thrower', 'grappler', 'thug'] },
+    { stage: 1, maxAttackers: 2, enemies: ['boss', 'heavy', 'thrower'] }, // inside the bar
+  ] as { stage: number; maxAttackers: number; enemies: EnemyKind[] }[],
   waveDelay: 90,
 
   coop: { extraPerWave: 1, reviveRange: 1.3, reviveFrames: 120, reviveHp: 40, tagWindow: 45, tagMultiplier: 1.5 },

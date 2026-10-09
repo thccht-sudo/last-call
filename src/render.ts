@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { TUNING as T, EnemyKind } from './sim/tuning';
 import { World, Enemy, Player, GameEvent, Vec, counterable, deflectable, framesToStrike } from './sim/world';
 import { buildKilroys } from './scene/kilroys';
-import { LEVEL } from './sim/level';
+import { buildInterior } from './scene/interior';
+import { LEVELS } from './sim/level';
 import { Figure, Look } from './figure';
 import { CLIPS } from './anim/pose';
 import { playerPose, enemyPose, Blender, Motion } from './anim/moves';
@@ -52,6 +53,8 @@ export class Renderer {
   private bottles = new Map<number, THREE.Mesh>();
   private cups = new Map<number, { mesh: THREE.Group; prompt: HTMLDivElement }>();
   private bossBar: HTMLDivElement | null = null;
+  private stages: THREE.Group[] = [];
+  private shown = -1;
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
   private moves = new Map<string, { last: Vec; distance: number; speed: number }>();
@@ -64,7 +67,13 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    buildKilroys(this.scene);
+    // One group per stage: out front, then inside. Only the current one is drawn.
+    for (const build of [buildKilroys, buildInterior]) {
+      const g = new THREE.Group();
+      build(g);
+      this.stages.push(g);
+      this.scene.add(g);
+    }
 
     addEventListener('resize', () => this.resize());
     this.resize();
@@ -166,6 +175,13 @@ export class Renderer {
   }
 
   draw(w: World) {
+    if (w.stage !== this.shown) {
+      this.shown = w.stage;
+      this.stages.forEach((g, i) => { g.visible = i === w.stage; });
+      const sky = w.stage === 0 ? 0x0b0e1a : 0x120a08;
+      this.scene.background = new THREE.Color(sky);
+      this.scene.fog = new THREE.Fog(sky, 26, 48);
+    }
     w.players.forEach((p, i) => {
       let v = this.players[i];
       if (!v) {
@@ -275,7 +291,7 @@ export class Renderer {
         m.rotation.x += 0.5;
       } else {
         const onTable = b.pos.x === b.home.x && b.pos.y === b.home.y;
-        m.position.set(b.pos.x, onTable ? (LEVEL.obstacles.some(o => o.kind === 'planter' && Math.abs(o.x - b.pos.x) < o.w / 2 && Math.abs(o.y - b.pos.y) < o.h / 2) ? 0.8 : 0.99) : 0.1, b.pos.y);
+        m.position.set(b.pos.x, onTable ? ((() => { const under = LEVELS[w.stage].obstacles.find(o => Math.abs(o.x - b.pos.x) < o.w / 2 && Math.abs(o.y - b.pos.y) < o.h / 2); return under?.kind === 'planter' ? 0.8 : under?.kind === 'bar' ? 1.28 : 0.99; })()) : 0.1, b.pos.y);
         m.rotation.set(0, 0, onTable ? 0 : Math.PI / 2);
       }
     }

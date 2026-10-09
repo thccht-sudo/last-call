@@ -333,3 +333,17 @@ describe('new enemies', () => {
     expect(T.grappler.hp - e.hp).toBe(dealt + T.slam.damage);
   });
 });
+
+describe('inside the bar', () => {
+  it('the final round moves everyone inside Kilroy\'s', () => {
+    const w = createWorld(3, 2);
+    for (let i = 0; i < 60 * 300 && w.wave < 2 && w.result === 'playing'; i++) {
+      step(w, w.players.map(p => botFor(w, p.index)));
+    }
+    expect(w.wave).toBe(2);
+    expect(w.stage).toBe(1);
+    expect(w.enemies.some(e => e.kind === 'boss')).toBe(true);
+    for (const p of w.players) expect(p.pos.y).toBeGreaterThan(1.5);
+    expect(w.bottles.length).toBe(2);
+  });
+});

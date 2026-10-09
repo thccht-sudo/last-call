@@ -1,7 +1,9 @@
 # Last Call
 
-Two friends, one bar, everyone wants a fight. A co-op brawler built by AI. Right now: single player,
-two waves, out front of Kilroy's on Kirkwood (502 E Kirkwood Ave, Bloomington) at night.
+Two friends, one bar, everyone wants a fight. A co-op brawler built by AI: two rounds out front of
+Kilroy's on Kirkwood (502 E Kirkwood Ave, Bloomington) at night, then the final round inside.
+The interior follows what's published (long straight bar, high-tops, raised booths, dance floor,
+stairs, the Polaroid wall); the exact floor plan isn't public, so placement is a best guess.
 
 Play: https://thccht-sudo.github.io/last-call/
 
@@ -33,7 +35,7 @@ the big ones are always FIJI. Three rounds:
 1. Three brawlers. Learn to counter (yellow prompt) and chain the three-hit string.
 2. Brawlers plus a cup thrower (counter a flying red cup to send it back) and a grappler (red
    prompt: dodge; if he catches you, mash any button, or have your partner hit him).
-3. The FIJI President: two counterable swings then an unblockable haymaker, super armour, and
+3. Inside Kilroy's, the FIJI President: two counterable swings then an unblockable haymaker, super armour, and
    backup at half health. Knock anyone into a table, the fence or a wall for a SLAM.
 
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3

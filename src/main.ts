@@ -79,9 +79,11 @@ function react(events: GameEvent[], w: World) {
     if (ev.type === 'whiff') sfx.whiff();
     if (ev.type === 'dodge') sfx.dodge();
     if (ev.type === 'shatter') sfx.shatter();
+    if (ev.type === 'stage' && ev.stage === 1) say("INSIDE KILROY'S", 90);
     if (ev.type === 'wave') {
       const last = ev.n === T.waves.length - 1;
-      say(last ? 'FINAL ROUND' : `ROUND ${ev.n + 1}`, 90);
+      if (T.waves[ev.n].stage === 0 || !last) say(last ? 'FINAL ROUND' : `ROUND ${ev.n + 1}`, 90);
+      else say("FINAL ROUND<small>inside Kilroy's</small>", 120);
       playMusic(last ? 'boss' : 'fight');
     }
   }
