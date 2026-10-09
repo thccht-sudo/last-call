@@ -1,0 +1,11 @@
+guard=dataset-1_punch_normal_001@0-18
+jab=dataset-1_punch_normal_001@16-50
+cross=dataset-1_punch_normal_002@86-130
+kick=dataset-1_kick_normal_001@36-84
+slash=dataset-1_slash_normal_001@30-100
+swagger=dataset-1_walk_chimpira_001~
+angry=dataset-1_walk_angry_001~
+run=dataset-1_run_normal_001~
+walk=dataset-1_walk_normal_001~
+call=dataset-1_call_normal_001
+taunt=dataset-1_respond_normal_001

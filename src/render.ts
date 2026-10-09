@@ -4,19 +4,16 @@ import { TUNING as T, EnemyKind } from './sim/tuning';
 import { World, Enemy, Player, GameEvent, Vec, counterable, deflectable, framesToStrike } from './sim/world';
 import { buildKilroys } from './scene/kilroys';
 import { LEVEL } from './sim/level';
+import { Figure, Look } from './figure';
+import { CLIPS } from './anim/pose';
+import { playerPose, enemyPose, Blender, Motion } from './anim/moves';
 
-
-interface Look {
-  shirt: number; pants: number; skin: number; scale: number;
-  jacket?: number; hair?: number; messy?: boolean; beard?: number; glasses?: boolean; collar?: number;
-  print?: { letters: string; ink: string }; // Greek letters across the chest and back
-}
 
 // From their photos. Player 1 is Conrad (6'5"): black collared work shirt, tousled brown hair,
 // short brown beard. Player 2 is George (5'10"): navy suit, open light-blue collar, full dark
 // beard, dark glasses, dark swept-up hair.
 export const CAST: { name: string; css: string; look: Look }[] = [
-  { name: 'CONRAD', css: '#2bb3a3', look: { shirt: 0x1e1f22, collar: 0x2c2d31, pants: 0x2b3448, skin: 0xe6b996, hair: 0x4e3524, messy: true, beard: 0x5a3b26, scale: 1.1 } },
+  { name: 'CONRAD', css: '#2bb3a3', look: { shirt: 0x1e1f22, collar: 0x2c2d31, pants: 0x2b3448, skin: 0xe6b996, hair: 0x4e3524, messy: true, beard: 0x5a3b26, longSleeves: true, scale: 1.1 } },
   {
     name: 'GEORGE', css: '#6f8fe0',
     look: { jacket: 0x1f2d5a, shirt: 0xc8daf0, pants: 0x1b2340, skin: 0xe4bc98, hair: 0x2a1d16, beard: 0x3a2518, glasses: true, scale: 1.0 },
@@ -44,134 +41,6 @@ const thugLook = (kind: EnemyKind, id: number): Look => {
   };
 };
 
-const printTex = new Map<string, THREE.CanvasTexture>();
-function letterTexture(letters: string, ink: string) {
-  const key = letters + ink;
-  if (!printTex.has(key)) {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 160;
-    const g = c.getContext('2d')!;
-    g.fillStyle = ink; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = `900 ${letters.length > 2 ? 104 : 124}px Georgia, "Times New Roman", serif`;
-    g.fillText(letters, 128, 84);
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-    printTex.set(key, t);
-  }
-  return printTex.get(key)!;
-}
-
-class Figure {
-  root = new THREE.Group();
-  body = new THREE.Group();
-  armL = new THREE.Group(); armR = new THREE.Group();
-  legL = new THREE.Group(); legR = new THREE.Group();
-  mats: THREE.MeshStandardMaterial[] = [];
-
-  constructor(look: Look) {
-    const cloth = new THREE.MeshStandardMaterial({ color: look.jacket ?? look.shirt, roughness: 0.7 });
-    const skin = new THREE.MeshStandardMaterial({ color: look.skin, roughness: 0.8 });
-    const dark = new THREE.MeshStandardMaterial({ color: look.pants, roughness: 0.9 });
-    this.mats = [cloth, skin, dark];
-    const mesh = (g: THREE.BufferGeometry, m: THREE.Material, y: number, parent: THREE.Object3D) => {
-      const o = new THREE.Mesh(g, m); o.position.y = y; o.castShadow = true; parent.add(o); return o;
-    };
-    mesh(new THREE.CapsuleGeometry(0.26, 0.45, 4, 10), cloth, 1.15, this.body);
-    mesh(new THREE.SphereGeometry(0.19, 14, 10), skin, 1.72, this.body);
-    if (look.jacket !== undefined) {
-      // Open collar: a wedge of shirt down the front of the jacket.
-      const shirt = mesh(new THREE.BoxGeometry(0.16, 0.42, 0.05), new THREE.MeshStandardMaterial({ color: look.shirt, roughness: 0.6 }), 1.32, this.body);
-      shirt.position.z = 0.25; shirt.rotation.x = -0.12;
-    }
-    if (look.print) {
-      const mat = new THREE.MeshStandardMaterial({ map: letterTexture(look.print.letters, look.print.ink), transparent: true, roughness: 0.8 });
-      for (const side of [1, -1]) {
-        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.29), mat);
-        decal.position.set(0, 1.27, side * 0.265);
-        if (side < 0) decal.rotation.y = Math.PI;
-        this.body.add(decal);
-      }
-    }
-    if (look.collar !== undefined) {
-      // Shirt collar points either side of the neck.
-      const collarMat = new THREE.MeshStandardMaterial({ color: look.collar, roughness: 0.8 });
-      for (const sx of [-1, 1]) {
-        const c = mesh(new THREE.BoxGeometry(0.13, 0.04, 0.12), collarMat, 1.52, this.body);
-        c.position.set(sx * 0.08, 1.52, 0.17); c.rotation.set(0.5, sx * 0.5, sx * 0.35);
-      }
-    }
-    if (look.hair !== undefined) {
-      const hairMat = new THREE.MeshStandardMaterial({ color: look.hair, roughness: 0.9 });
-      const cap = mesh(new THREE.SphereGeometry(0.2, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hairMat, 1.76, this.body);
-      cap.position.z = -0.02;
-      if (look.messy) {
-        for (const [x, z, r] of [[-0.08, 0.06, 0.4], [0.07, 0.09, -0.3], [0.0, -0.06, 0.1], [0.12, -0.02, -0.6], [-0.13, 0.0, 0.7]]) {
-          const tuft = mesh(new THREE.SphereGeometry(0.075, 8, 6), hairMat, 1.9, this.body);
-          tuft.position.set(x, 1.89, z); tuft.scale.set(1.2, 0.55, 1); tuft.rotation.z = r;
-        }
-      } else {
-        const quiff = mesh(new THREE.SphereGeometry(0.11, 10, 6), hairMat, 1.9, this.body);
-        quiff.position.z = 0.08; quiff.scale.set(1.3, 0.6, 1);
-      }
-    }
-    if (look.beard !== undefined) {
-      const beard = mesh(new THREE.SphereGeometry(0.16, 12, 8), new THREE.MeshStandardMaterial({ color: look.beard, roughness: 1 }), 1.6, this.body);
-      beard.position.z = 0.08;
-      if (look.messy) { beard.position.y = 1.62; beard.scale.set(1.0, 0.85, 0.8); } else beard.scale.set(1.05, 1.1, 0.85);
-    }
-    if (look.glasses) {
-      const frame = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.4 });
-      for (const x of [-0.075, 0.075]) {
-        const lens = mesh(new THREE.TorusGeometry(0.05, 0.012, 6, 14), frame, 1.75, this.body);
-        lens.position.set(x, 1.75, 0.18);
-      }
-      const bridge = mesh(new THREE.BoxGeometry(0.06, 0.012, 0.012), frame, 1.76, this.body);
-      bridge.position.z = 0.185;
-    }
-    for (const [g, x] of [[this.armL, 0.36], [this.armR, -0.36]] as const) {
-      g.position.set(x, 1.45, 0);
-      mesh(new THREE.CapsuleGeometry(0.08, 0.5, 4, 8), cloth, -0.3, g);
-      mesh(new THREE.SphereGeometry(0.1, 10, 8), skin, -0.62, g);
-      this.body.add(g);
-    }
-    for (const [g, x] of [[this.legL, 0.14], [this.legR, -0.14]] as const) {
-      g.position.set(x, 0.82, 0);
-      mesh(new THREE.CapsuleGeometry(0.1, 0.6, 4, 8), dark, -0.4, g);
-      this.body.add(g);
-    }
-    this.root.add(this.body);
-    this.root.scale.setScalar(look.scale);
-  }
-
-  reset() {
-    for (const g of [this.armL, this.armR, this.legL, this.legR]) g.rotation.set(0, 0, 0);
-    this.body.rotation.set(0, 0, 0);
-    this.body.position.set(0, 0, 0);
-    this.armL.rotation.set(-1.1, 0, -0.25);
-    this.armR.rotation.set(-1.1, 0, 0.25);
-  }
-
-  place(pos: Vec, facing: Vec) {
-    this.root.position.set(pos.x, 0, pos.y);
-    this.root.rotation.y = Math.atan2(facing.x, facing.y);
-  }
-
-  walk(phase: number, amount: number) {
-    this.legL.rotation.x = Math.sin(phase) * 0.7 * amount;
-    this.legR.rotation.x = -Math.sin(phase) * 0.7 * amount;
-    this.body.position.y = Math.abs(Math.sin(phase)) * 0.05 * amount;
-  }
-
-  lieDown(k: number) {
-    this.body.rotation.x = -Math.PI / 2 * k;
-    this.body.position.y = 0.25 * k;
-    this.body.position.z = -0.9 * k;
-  }
-
-  glow(color: number, intensity: number) {
-    this.mats[0].emissive.setHex(color);
-    this.mats[0].emissiveIntensity = intensity;
-  }
-}
-
 interface Fx { mesh: THREE.Object3D; life: number; max: number; vel?: THREE.Vector3; grow?: number }
 
 export class Renderer {
@@ -185,8 +54,8 @@ export class Renderer {
   private bossBar: HTMLDivElement | null = null;
   private fx: Fx[] = [];
   private camTarget = new THREE.Vector3();
-  private walkPhase = new Map<object, number>();
-  private lastPos = new Map<object, Vec>();
+  private moves = new Map<object, { last: Vec; distance: number; speed: number }>();
+  private blenders = new Map<object, Blender>();
   private overlay: HTMLElement;
 
   constructor(canvas: HTMLCanvasElement, overlay: HTMLElement) {
@@ -208,114 +77,38 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
   }
 
-  private stride(key: object, pos: Vec): number {
-    const last = this.lastPos.get(key) ?? pos;
-    const moved = Math.hypot(pos.x - last.x, pos.y - last.y);
-    this.lastPos.set(key, { ...pos });
-    const phase = (this.walkPhase.get(key) ?? 0) + moved * 3.2;
-    this.walkPhase.set(key, phase);
-    return moved;
+  // Distance walked and current speed per character, for stepping the gait cycles.
+  private motion(key: object, pos: Vec, topSpeed: number): Motion {
+    let m = this.moves.get(key);
+    if (!m) { m = { last: { ...pos }, distance: 0, speed: 0 }; this.moves.set(key, m); }
+    const d = Math.hypot(pos.x - m.last.x, pos.y - m.last.y);
+    m.last = { ...pos };
+    m.distance += d;
+    m.speed += (Math.min(1, d / (topSpeed / 60)) - m.speed) * 0.25;
+    return m;
+  }
+
+  private blender(key: object) {
+    let b = this.blenders.get(key);
+    if (!b) { b = new Blender(); this.blenders.set(key, b); }
+    return b;
   }
 
   private posePlayer(p: Player, f: Figure, w: World) {
-    f.reset();
     f.place(p.pos, p.facing);
-    const moved = this.stride(p, p.pos);
-    const k = (n: number) => Math.min(1, p.t / Math.max(1, n));
-    switch (p.state) {
-      case 'free':
-        f.walk(this.walkPhase.get(p)!, Math.min(1, moved * 12));
-        break;
-      case 'attack': {
-        const s = p.smash ? T.combo[2] : T.combo[p.combo];
-        const wind = p.t < s.startup, strike = p.t < s.startup + s.active + 6;
-        const hold = p.holding !== null || p.smash;
-        if (p.smash || hold) {
-          f.armR.rotation.set(wind ? -2.9 : strike ? -0.9 : -1.2, 0, 0);
-        } else if (p.combo === 2) {
-          f.legR.rotation.x = wind ? 0.4 : strike ? -1.5 : -0.4;
-          f.body.rotation.x = wind ? 0 : -0.25;
-        } else {
-          const arm = p.combo === 0 ? f.armL : f.armR;
-          arm.rotation.set(wind ? -0.6 : strike ? -1.6 : -1.2, 0, 0);
-          f.body.rotation.y = (p.combo === 0 ? 1 : -1) * (wind ? -0.2 : 0.35);
-        }
-        f.body.rotation.x += wind ? 0.05 : -0.12;
-        break;
-      }
-      case 'counter':
-        f.armR.rotation.set(p.t < 8 ? -1.7 : -1.3, 0, 0.1);
-        f.armL.rotation.set(-0.3, 0, -0.5);
-        f.body.rotation.y = -0.5 * (1 - k(T.counter.frames));
-        break;
-      case 'whiff':
-        f.armL.rotation.set(-2.2, 0, -0.6); f.armR.rotation.set(-2.2, 0, 0.6);
-        f.body.rotation.x = 0.2;
-        break;
-      case 'dodge':
-        f.body.position.y = -0.35; f.body.rotation.x = -0.5;
-        f.legL.rotation.x = -0.9; f.legR.rotation.x = 0.6;
-        break;
-      case 'hitstun':
-        f.body.rotation.x = 0.35 * (1 - k(20)); f.armL.rotation.x = -0.3; f.armR.rotation.x = -0.3;
-        break;
-      case 'down':
-        f.lieDown(1);
-        break;
-      case 'grabbed': {
-        const flail = Math.sin(w.frame * 0.6) * 0.5;
-        f.armL.rotation.set(-2.4 + flail, 0, -0.4); f.armR.rotation.set(-2.4 - flail, 0, 0.4);
-        f.legL.rotation.x = flail; f.legR.rotation.x = -flail;
-        f.body.position.y = 0.15; f.body.rotation.x = 0.15;
-        break;
-      }
-    }
-    if (p.holding !== null && p.state !== 'attack') f.armR.rotation.set(-0.5, 0, 0.1);
+    const target = playerPose(p, w, this.motion(p, p.pos, T.player.speed));
+    const contact = p.state === 'attack' || p.state === 'counter';
+    f.apply(this.blender(p).next(`${p.state}:${p.combo}:${p.smash}`, target, contact));
     f.glow(0xffffff, p.state === 'counter' ? 0.25 : p.state === 'hitstun' && w.frame % 6 < 3 ? 0.4 : 0);
   }
 
   private poseEnemy(e: Enemy, f: Figure, w: World) {
-    f.reset();
     f.place(e.pos, e.facing);
-    const moved = this.stride(e, e.pos);
-    const big = e.unblockable;
-    switch (e.state) {
-      case 'spawn': case 'circle': case 'approach': case 'recover':
-        f.walk(this.walkPhase.get(e)!, Math.min(1, moved * 12));
-        if (e.state === 'recover') { f.armR.rotation.set(-1.3, 0, 0.2); f.body.rotation.x = -0.15; }
-        break;
-      case 'windup': {
-        const k = e.t / e.dur;
-        if (e.kind === 'grappler') { f.armL.rotation.set(-1.4, 0, -1.2 * k); f.armR.rotation.set(-1.4, 0, 1.2 * k); f.body.rotation.x = -0.2 * k; }
-        else if (e.kind === 'thrower') { f.armR.rotation.set(-1.1 - 2.0 * k, 0, 0.3); f.body.rotation.y = -0.5 * k; }
-        else if (big) { f.armL.rotation.set(-1.1 - 1.9 * k, 0, -0.2); f.armR.rotation.set(-1.1 - 1.9 * k, 0, 0.2); f.body.rotation.x = 0.25 * k; }
-        else { f.armR.rotation.set(-1.1 + 1.6 * k, 0, 0.5 * k); f.body.rotation.y = -0.7 * k; }
-        break;
-      }
-      case 'active':
-        if (e.kind === 'thrower') { f.armR.rotation.set(-1.2, 0, 0); f.body.rotation.y = 0.4; }
-        else if (big) { f.armL.rotation.set(-1.3, 0, 0); f.armR.rotation.set(-1.3, 0, 0); f.body.rotation.x = -0.4; }
-        else { f.armR.rotation.set(-1.65, 0, 0); f.body.rotation.y = 0.4; f.body.rotation.x = -0.15; }
-        break;
-      case 'holding':
-        f.armL.rotation.set(-1.5, 0, 0.35); f.armR.rotation.set(-1.5, 0, -0.35); f.body.rotation.x = 0.1;
-        break;
-      case 'stun':
-        f.body.rotation.x = 0.4; f.armL.rotation.x = -0.2; f.armR.rotation.x = -0.2;
-        break;
-      case 'down':
-        f.lieDown(Math.min(1, e.t / 8));
-        break;
-      case 'getup':
-        f.lieDown(1 - e.t / e.dur);
-        break;
-      case 'dead':
-        f.lieDown(Math.min(1, e.t / 8 + 0.3));
-        break;
-    }
+    const target = enemyPose(e, w, this.motion(e, e.pos, T[e.kind].speed));
+    f.apply(this.blender(e).next(e.state, target, e.state === 'active' || e.state === 'down'));
     const strike = framesToStrike(e);
     let glow = 0, color = 0xffd23f;
-    if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = big ? 0xff2020 : 0xffd23f; }
+    if (strike !== null && strike <= T.counter.window) { glow = 0.5 + 0.3 * Math.sin(w.frame * 0.8); color = e.unblockable ? 0xff2020 : 0xffd23f; }
     if (e.state === 'stun' && e.t < 4) { glow = 0.8; color = 0xffffff; }
     f.glow(color, glow);
   }
@@ -375,7 +168,7 @@ export class Renderer {
     w.players.forEach((p, i) => {
       let v = this.players[i];
       if (!v) {
-        const fig = new Figure(CAST[i].look);
+        const fig = new Figure(CAST[i].look, CLIPS.guard.frames[0]);
         this.scene.add(fig.root);
         const tag = document.createElement('div'); tag.className = 'nametag';
         tag.style.setProperty('--c', CAST[i].css);
@@ -397,7 +190,7 @@ export class Renderer {
       seen.add(e.id);
       let v = this.enemies.get(e.id);
       if (!v) {
-        const fig = new Figure(thugLook(e.kind, e.id));
+        const fig = new Figure(thugLook(e.kind, e.id), CLIPS.guard.frames[0]);
         this.scene.add(fig.root);
         const prompt = document.createElement('div'); prompt.className = 'prompt';
         const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));

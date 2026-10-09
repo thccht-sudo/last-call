@@ -32,8 +32,23 @@ the big ones are always FIJI. Three rounds:
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
 through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
 
+Animation: jointed mannequins posed from motion capture. Punches, the kick, the overhead smash,
+walks and the frat swagger are real mocap from the Bandai Namco Research Motion Dataset,
+retimed onto each move's frame data by `src/anim/moves.ts`, so tuning a move's startup, active
+or recovery frames retimes its animation too. Rolls, hit reactions, knockdowns and grabs are
+procedural poses built with IK. `npm run dev` then open `/strip.html?move=jab` (or kick,
+dodge, haymaker, grapple, knockdown...) to see any move as a row of stills.
+`tools/bake-mocap.mjs` re-bakes the clips listed in `tools/mocap-clips.txt`.
+
 `npm install && npm run dev` to run locally. After each deploy CI plays the live site with
 `tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,
 including a bot that has to clear the bar. All feel numbers live in `src/sim/tuning.ts`; the
 level layout (patio, fence, tables, lamppost, spawns) in `src/sim/level.ts`, and its look in
 `src/scene/kilroys.ts`.
+
+## Credits
+
+Motion capture: [Bandai Namco Research Motion Dataset](https://github.com/BandaiNamcoResearchInc/Bandai-Namco-Research-Motiondataset)
+by Bandai Namco Research Inc., licensed [CC BY-NC 4.0](src/anim/MOCAP-LICENSE.txt), retargeted
+and retimed for this game. Because of that license, this game is and stays non-commercial.
+Music generated with Google Lyria 3. Everything else built by Claude.
