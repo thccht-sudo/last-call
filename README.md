@@ -97,13 +97,18 @@ socks pulled up and dad sneakers, tucked-in polos and oxfords with braided belts
 shirts, flame shirts on the big ones, fanny packs, trucker caps, frosted tips, horseshoe hair,
 mullets, goatees, wraparound shades pushed up on the head and the odd Bluetooth earpiece. Same
 moves as the frats (hooks, kicks, cup throwers, dad-dancing spin kicks, heavies), new voices.
-The setlist (Stay Ready, Endless Nights, One More Song) is shout-along bar-band rock with
-piano and organ, played through in order, round and round; the composition of every song's
+The setlist is ten songs (about half an hour) of shout-along bar-band rock, played through in
+order, round and round: crunchy twin guitars, barroom piano and organ, gang-vocal choruses, and
+a singer who talks his way through long stories about Kevin from the message board, Denise at
+the merch table, uncs in cargo shorts and a curfew that's only a rumor. `tools/generate-setlist.mjs`
+makes each one with Lyria 3, then has an audio model listen to it (`tools/judge-music.mjs`)
+and score how well it passes for the band (talk-sung vocal, guitars, keys, singalong);
+off-style takes are regenerated and the best is kept. The composition of every song's
 wave is fixed, so scores compare fairly. Tuning lives in `TUNING.concert`; the venue layout in
 `CONCERT` in `src/sim/level.ts` and its look (stage, band, lights, crowd) in `src/scene/saltshed.ts`.
 
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
-through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state, plus The Hold Ready's three songs (vocals and lyrics by Lyria from our prompts in the same script). M mutes.
+through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state, plus The Hold Ready's setlist (our lyrics, sung by Lyria; see above). M mutes.
 
 Characters: modelled in Blender by `tools/build-characters.py` (run with the `bpy` module,
 Blender 4.2: `pip install bpy==4.2.0` on Python 3.11, then `python tools/build-characters.py
