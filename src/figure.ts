@@ -222,7 +222,7 @@ export class Figure {
     this.head.add(skullInk);
     skull.position.y = 0.09; skull.castShadow = true;
     this.head.add(skull);
-    if (look.hair !== undefined) {
+    if (look.hair !== undefined && look.hat !== 'cap') {
       const hair = mat(look.hair, 0.95);
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.122, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hair);
       cap.position.set(0, 0.112, -0.022); cap.rotation.x = -0.32;
