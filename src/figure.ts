@@ -340,6 +340,11 @@ export class Figure {
   // player is never lost behind an enemy or a bin.
   xray(color: number) {
     const m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false, depthFunc: THREE.GreaterDepth });
+    // Pulled toward the camera by about a body's depth, so his own arms never count as cover.
+    m.onBeforeCompile = sh => {
+      sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+        mvPosition.z += 0.4; gl_Position = projectionMatrix * mvPosition;`);
+    };
     const ghost = new THREE.SkinnedMesh(this.body.geometry, m);
     ghost.frustumCulled = false; ghost.renderOrder = 5;
     ghost.bind(this.body.skeleton, new THREE.Matrix4());
