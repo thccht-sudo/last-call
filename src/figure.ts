@@ -107,32 +107,49 @@ export class Figure {
     if (look.hair !== undefined) {
       const hair = mat(look.hair, 0.95);
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.122, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2.1), hair);
-      cap.position.set(0, 0.105, -0.012);
+      cap.position.set(0, 0.112, -0.022); cap.rotation.x = -0.32;
       this.head.add(cap);
       const tufts: [number, number, number][] = look.messy
         ? [[-0.05, 0.035, 0.4], [0.045, 0.055, -0.3], [0, -0.04, 0.1], [0.075, -0.012, -0.6], [-0.08, 0, 0.7]]
         : [[0, 0.05, 0]];
       for (const [x, z, r] of tufts) {
         const t = new THREE.Mesh(new THREE.SphereGeometry(look.messy ? 0.048 : 0.07, 8, 6), hair);
-        t.position.set(x, 0.2, z); t.scale.set(1.25, 0.55, 1); t.rotation.z = r;
+        t.position.set(x, 0.205, z - 0.01); t.scale.set(1.25, 0.55, 1); t.rotation.z = r;
         this.head.add(t);
       }
     }
+    // Face: eyes, brows and a nose, so the head reads as a person at gameplay distance.
+    const dark = mat(0x161210, 0.5);
+    for (const x of [-0.038, 0.038]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), dark);
+      eye.position.set(x, 0.1, 0.104);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.009, 0.012), mat(look.hair ?? 0x2a1d16, 0.9));
+      brow.position.set(x, 0.127, 0.104); brow.rotation.z = x > 0 ? -0.15 : 0.15;
+      this.head.add(eye, brow);
+    }
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.019, 8, 6), skin);
+    nose.position.set(0, 0.078, 0.116); nose.scale.set(0.9, 1.2, 1);
+    this.head.add(nose);
     if (look.beard !== undefined) {
-      const beard = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 8), mat(look.beard, 1));
-      beard.position.set(0, look.messy ? 0.035 : 0.025, 0.05);
-      beard.scale.set(1.02, look.messy ? 0.8 : 1.05, 0.85);
-      this.head.add(beard);
+      // A shell hugging the jaw and cheeks, plus a moustache; fuller for a full beard.
+      const beardMat = new THREE.MeshStandardMaterial({ color: look.beard, roughness: 1, side: THREE.DoubleSide });
+      const full = !look.messy;
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(full ? 0.124 : 0.12, 18, 10, Math.PI / 2 - 1.25, 2.5, Math.PI * (full ? 0.57 : 0.61), Math.PI * (full ? 0.37 : 0.33)), beardMat);
+      shell.position.y = 0.09;
+      if (full) shell.scale.set(1.04, 1.12, 1.06);
+      const stache = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.045, 4, 8), beardMat);
+      stache.rotation.z = Math.PI / 2; stache.position.set(0, 0.058, 0.112);
+      this.head.add(shell, stache);
     }
     if (look.glasses) {
       const frame = mat(0x151515, 0.4);
-      for (const x of [-0.045, 0.045]) {
-        const lens = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.008, 6, 14), frame);
-        lens.position.set(x, 0.105, 0.11);
+      for (const x of [-0.04, 0.04]) {
+        const lens = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.0045, 6, 16), frame);
+        lens.position.set(x, 0.1, 0.118);
         this.head.add(lens);
       }
-      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.008, 0.008), frame);
-      bridge.position.set(0, 0.11, 0.113);
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.005, 0.005), frame);
+      bridge.position.set(0, 0.104, 0.121);
       this.head.add(bridge);
     }
     this.root.add(this.head);
