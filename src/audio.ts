@@ -24,6 +24,7 @@ export const VOICE = {
   bossIntro: ['boss1'], bossBackup: ['boss2'], bossSwing: ['boss3'], bossDown: ['boss4'],
   conradStart: ['conrad1'], conradSwing: ['conrad2'], georgeJoin: ['george1'], georgeSwing: ['george2'],
   conradDown: ['down1'], georgeDown: ['down2'], win: ['win'],
+  conradEvade: ['evade1'], georgeEvade: ['evade2'], conradRank: ['rank1'], georgeRank: ['rank2'], stomped: ['stomp1'],
 } as const;
 
 export function unlockAudio() {
@@ -106,6 +107,7 @@ export const sfx = {
   hurt() { punch(false); noise(0.12, 900, 0.4); thump(60, 0.18, 0.7); },
   whiff() { noise(0.12, 600, 0.25); },
   warn() { sting([660, 990], 0.07); },
+  rank(r: number) { sting([440 * 2 ** (r / 6), 660 * 2 ** (r / 6)], 0.04); },
   perfect() { sting([1320, 1760, 2640], 0.05); noise(0.25, 5000, 0.15); },
   launch() { punch(true); noise(0.22, 1800, 0.3); thump(120, 0.25, 0.6); },
   spike() { punch(true); noise(0.3, 1400, 0.45); thump(50, 0.4, 1); },

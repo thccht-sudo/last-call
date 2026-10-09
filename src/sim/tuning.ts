@@ -61,7 +61,18 @@ export const TUNING = {
   hitstop: { light: 5, heavy: 9, counter: 10, bottle: 8, launch: 7, spike: 12, victimExtra: 2 },
 
   // Juggles: launched enemies fly on a 2D-plus-height arc; each air hit pops them up less.
-  air: { gravity: 0.011, launch: 0.2, pop: 0.13, popDecay: 0.75, landDown: 46, maxHits: 3 },
+  // Rising is floatier than falling, and he hangs at the top of the arc.
+  air: { gravity: 0.011, rise: 0.85, fall: 1.3, hang: 0.45, hangBelow: 0.025, launch: 0.2, pop: 0.13, popDecay: 0.75, landDown: 46, maxHits: 3 },
+
+  // Style meter: points per move, a variety penalty for repeating yourself, decay when idle,
+  // and a dropped tier when you're hit. Tiers are bar-themed.
+  style: {
+    points: { jab: 4, cross: 5, roundhouse: 12, sweep: 12, uppercut: 14, juggle: 9, spike: 20, riposte: 15, knee: 14, stomp: 8, smash: 16, throw: 12, counter: 15, perfect: 22, slam: 16, deflect: 14, ko: 10 } as Record<string, number>,
+    repeat: 0.35, // a move in your last four earns this much
+    tiers: [30, 80, 150, 240, 350, 480],
+    names: ['TIPSY', 'BUZZED', 'ROWDY', 'WILD', 'LEGENDARY', 'LAST CALL'],
+    max: 560, idle: 45, decay: 0.45,
+  },
   spikeWave: { radius: 2, damage: 6 },
   stompExtra: 16,
 

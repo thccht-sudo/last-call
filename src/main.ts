@@ -1,5 +1,5 @@
 import './style.css';
-import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT, Input } from './sim/world';
+import { createWorld, step, addPlayer, World, GameEvent, NO_INPUT, Input, styleRank } from './sim/world';
 import { TUNING as T } from './sim/tuning';
 import { Controls } from './input';
 import { Renderer, CAST } from './render';
@@ -80,9 +80,11 @@ function togglePause() {
 
 hud.innerHTML = CAST.map((c, i) => `
   <div class="pbar p${i + 1}" style="--c:${c.css}">
-    <b>${c.name}</b><div class="hp"><i></i></div><small></small>
+    <b>${c.name}</b><div class="hp"><i></i></div><div class="style"><em></em><span><i></i></span></div><small></small>
   </div>`).join('');
 const bars = [...hud.querySelectorAll<HTMLElement>('.pbar')];
+const RANK_COLORS = ['#cfd8dc', '#8fd3ff', '#7cf08a', '#ffd23f', '#ff8a3d', '#ff3d6e'];
+const shownRank: number[] = [];
 
 function say(text: string, frames = 0) {
   banner.innerHTML = text;
@@ -108,6 +110,7 @@ function react(events: GameEvent[], w: World) {
   const bottled = events.some(e => e.type === 'shatter') && events.some(e => e.type === 'hit');
   if (bottled) voice(VOICE.bottled, { chance: 0.6 });
   for (const ev of events) {
+    if (ev.type === 'hit' && ev.move === 'stomp') voice(VOICE.stomped, { chance: 0.6 });
     if (ev.type === 'hit' && ev.heavy) {
       voice(VOICE.hurt, { chance: 0.35 });
       if (ev.by >= 0) voice(ev.by === 0 ? VOICE.conradSwing : VOICE.georgeSwing, { chance: 0.15 });
@@ -126,16 +129,19 @@ function react(events: GameEvent[], w: World) {
     if (ev.type === 'slam') { sfx.hit(true); rumble(0, 0.8, 0.8, 150); rumble(1, 0.8, 0.8, 150); }
     if (ev.type === 'deflect') { sfx.counter(); rumble(ev.by, 0.6, 0.6, 100); }
     if (ev.type === 'throw') sfx.whiff();
+    if (ev.type === 'rank') { sfx.rank(ev.rank); if (ev.rank >= 4) voice(ev.player === 0 ? VOICE.conradRank : VOICE.georgeRank, { interrupt: ev.rank === T.style.names.length - 1 }); }
     if (ev.type === 'perfect') {
       // Perfect evade: a beat of slow motion, unless a finisher's already slowing things down.
       if (performance.now() > slowUntil) { slowUntil = performance.now() + 420; slowScale = 0.3; }
       sfx.perfect(); rumble(ev.by, 0.3, 0.8, 90);
+      voice(ev.by === 0 ? VOICE.conradEvade : VOICE.georgeEvade, { chance: 0.6 });
     }
     if (ev.type === 'launch') { sfx.launch(); if (ev.by >= 0) rumble(ev.by, 0.6, 0.8, 120); }
     if (ev.type === 'spike') { sfx.spike(); rumble(0, 0.9, 0.9, 180); rumble(1, 0.9, 0.9, 180); voice(VOICE.floored, { chance: 0.5 }); }
     if (ev.type === 'swing' && T.attacks[ev.attack].red) sfx.warn();
     if (ev.type === 'enrage') say('HE CALLED FOR BACKUP', 90);
     if (ev.type === 'ko' && ev.boss) say('THE PRESIDENT IS DOWN', 90);
+    if (ev.type === 'ko' && !ev.boss && w.enemies.every(e => e.state === 'dead') && w.wave < T.waves.length - 1) say('ROUND CLEAR', 80);
     if (ev.type === 'playerHit') { sfx.hurt(); rumble(ev.player, 1, 1, 200); }
     if (ev.type === 'playerDown' && w.players.length > 1 && w.result === 'playing') say(`${CAST[ev.player].name} IS DOWN<small>stand next to them to help them up</small>`, 120);
     if (ev.type === 'revived') say(`${CAST[ev.player].name} IS BACK UP`, 60);
@@ -321,6 +327,15 @@ function frame(now: number) {
     bar.classList.toggle('waiting', !p);
     bar.querySelector<HTMLElement>('i')!.style.width = p ? `${(p.hp / T.player.hp) * 100}%` : '0%';
     const waiting = host ? (host.status === 'connected' ? '' : 'waiting for the online link') : 'press any button to join · O to play online';
+    // Style rank and progress to the next tier.
+    const em = bar.querySelector<HTMLElement>('.style em')!, fill = bar.querySelector<HTMLElement>('.style span i')!;
+    const rank = p ? styleRank(p.style) : -1;
+    const tiers = T.style.tiers, lo = rank < 0 ? 0 : tiers[rank], hi = tiers[rank + 1] ?? T.style.max;
+    em.textContent = rank >= 0 && started ? T.style.names[rank] : '';
+    bar.style.setProperty('--rank', RANK_COLORS[Math.max(0, rank)]);
+    fill.style.width = p && started && p.style > 0 ? `${Math.min(100, ((p.style - lo) / (hi - lo)) * 100)}%` : '0%';
+    if (rank > (shownRank[i] ?? -1)) { em.classList.remove('up'); void em.offsetWidth; em.classList.add('up'); }
+    shownRank[i] = rank;
     const combo = p && p.hits >= 3 && world.frame - p.lastHitAt < 90 ? `${p.hits} HITS` : '';
     bar.querySelector('small')!.textContent = !started ? '' : !p ? waiting : p.state === 'down' ? 'DOWN' : combo;
   });

@@ -6,7 +6,7 @@ import { createWorld, spawnEnemy, Player, Enemy, World } from './sim/world';
 import { Figure } from './figure';
 import { CLIPS, Pose } from './anim/pose';
 import { playerPose, enemyPose } from './anim/moves';
-import { CAST } from './render';
+import { CAST, thugLook } from './render';
 
 const move = new URLSearchParams(location.search).get('move') ?? 'jab';
 const view = new URLSearchParams(location.search).get('view') ?? 'side';
@@ -71,7 +71,9 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(3, 5, 4)
 const labels: string[] = [];
 for (let i = 0; i < N; i++) {
   const t = Math.round((m.total - 1) * i / (N - 1));
-  const fig = new Figure(CAST[face ? i : 0].look, CLIPS.guard.frames[0]);
+  // ?who=thug|heavy|kicker|thrower|boss draws that enemy (id from the frame index) instead.
+  const who = new URLSearchParams(location.search).get('who') as Enemy['kind'] | null;
+  const fig = new Figure(who ? thugLook(who, i + 2) : CAST[face ? i : 0].look, CLIPS.guard.frames[0]);
   fig.root.scale.setScalar(1);
   fig.apply(face ? CLIPS.walk.frames[0] : m.pose(t));
   fig.root.position.x = i * 1.5;

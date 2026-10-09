@@ -24,6 +24,7 @@ export interface Player {
   counterAt: number; dodgeEnd: number; // for riposte and flying-knee follow-ups
   hits: number; lastHitAt: number; // running hit counter for the HUD
   stop: number; hitDir: Vec; // frames frozen in hitstop, and which way the hit came from
+  style: number; styleAt: number; styleLog: string[]; // style meter, when it last grew, recent moves
   dodgeDir: Vec; dodgeKind: DodgeKind; perfectAt: number; holding: number | null;
   buffer: { action: Action; frames: number; mx: number; my: number } | null; // a press waiting to happen, with the stick as it was
 }
@@ -40,6 +41,7 @@ export interface Enemy {
   string: number; // boss: position in his hook, elbow, haymaker string
   enraged: boolean; slammed: boolean; stomped: boolean;
   stop: number; hitDir: Vec; // hitstop frames left, and the direction of the hit (for the shake)
+  ring: number; feint: number; // circling: drift on his ring, and a fake step in
 }
 
 export interface Bottle { id: number; home: Vec; pos: Vec; vel: Vec; state: 'ground' | 'held' | 'flying' | 'broken'; t: number; holder: number }
@@ -66,6 +68,7 @@ export type GameEvent =
   | { type: 'shatter'; pos: Vec }
   | { type: 'dodge'; by: number }
   | { type: 'perfect'; pos: Vec; by: number }
+  | { type: 'rank'; player: number; rank: number }
   | { type: 'wave'; n: number }
   | { type: 'stage'; stage: number }
   | { type: 'ko'; pos: Vec; boss: boolean };
@@ -75,8 +78,9 @@ export interface Stats {
   dealt: number; taken: number; takenBy: Record<string, number>;
   missedCounters: number; counters: number; deflects: number; whiffs: number; dodges: number;
   slams: number; kos: number; downs: number; launches: number; bestCombo: number; perfects: number;
+  style: number; bestRank: number; // total style points, highest tier reached (-1 none)
 }
-const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0, launches: 0, bestCombo: 0, perfects: 0 });
+const newStats = (): Stats => ({ dealt: 0, taken: 0, takenBy: {}, missedCounters: 0, counters: 0, deflects: 0, whiffs: 0, dodges: 0, slams: 0, kos: 0, downs: 0, launches: 0, bestCombo: 0, perfects: 0, style: 0, bestRank: -1 });
 
 export interface World {
   frame: number; hitstop: number; shake: number;
@@ -101,7 +105,7 @@ function newPlayer(index: number, pos: Vec): Player {
   return {
     index, revive: 0, pos: { ...pos }, facing: { x: 0, y: -1 }, hp: T.player.hp,
     state: 'free', t: 0, dur: 0, move: 'jab', lead: 0, target: null, hasHit: false,
-    combo: 0, comboAt: -999, counterAt: -999, dodgeEnd: -999, hits: 0, lastHitAt: -999, stop: 0, hitDir: { x: 0, y: 0 },
+    combo: 0, comboAt: -999, counterAt: -999, dodgeEnd: -999, hits: 0, lastHitAt: -999, stop: 0, hitDir: { x: 0, y: 0 }, style: 0, styleAt: -999, styleLog: [],
     dodgeDir: { x: 0, y: 0 }, dodgeKind: 'dash', perfectAt: -999, holding: null, buffer: null,
   };
 }
@@ -138,7 +142,7 @@ export function spawnEnemy(w: World, kind: EnemyKind, pos: Vec, state: EnemyStat
     hp: Math.round(k.hp * mods(w).enemyHp), maxHp: Math.round(k.hp * mods(w).enemyHp), state, t: 0, dur: state === 'spawn' ? 20 : 0,
     cooldown: 30 + Math.floor(rand(w) * 60), angle: rand(w) * Math.PI * 2, orbit: rand(w) < 0.5 ? -1 : 1, entry: { ...entry },
     focus: 0, lastHitBy: -1, lastHitFrame: -999, attack: k.moves[0], unblockable: false, connected: false,
-    z: 0, vz: 0, juggle: 0, string: 0, enraged: false, slammed: false, stomped: false, stop: 0, hitDir: { x: 0, y: 0 },
+    z: 0, vz: 0, juggle: 0, string: 0, enraged: false, slammed: false, stomped: false, stop: 0, hitDir: { x: 0, y: 0 }, ring: 0, feint: 0,
   };
   w.enemies.push(e);
   return e;
@@ -194,6 +198,8 @@ export function pickTarget(w: World, p: Player, dir: Vec, range: number, sticky 
     if (facing < -0.1 && d > 1.6) continue;
     let score = d - 3 * facing;
     if (sticky && e.id === p.target) score -= 2.5;
+    // Someone behind a table or the fence is a poor pick: you'd lunge into the furniture.
+    if (d > 1.6 && !clearLine(p.pos, e.pos, 0.2)) score += 4;
     if (score < bestScore) { bestScore = score; best = e; }
   }
   return best;
@@ -303,7 +309,7 @@ function damageEnemy(w: World, e: Enemy, dmg: number, from: Vec, knock: number, 
     e.hp = 0;
     e.vel = { x: away.x * 0.3, y: away.y * 0.3 };
     setEnemy(e, 'dead', 0);
-    if (e.lastHitBy >= 0) w.stats[e.lastHitBy].kos++;
+    if (e.lastHitBy >= 0) { w.stats[e.lastHitBy].kos++; addStyle(w, w.players[e.lastHitBy], 'ko'); }
     w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' });
     return;
   }
@@ -360,6 +366,23 @@ function enrage(w: World, e: Enemy) {
   }
 }
 
+export const styleRank = (style: number) => { let r = -1; T.style.tiers.forEach((t, i) => { if (style >= t) r = i; }); return r; };
+
+function addStyle(w: World, p: Player | undefined, what: string) {
+  if (!p) return;
+  const fresh = !p.styleLog.includes(what) || what === 'ko';
+  const pts = Math.round((T.style.points[what] ?? 5) * (fresh ? 1 : T.style.repeat));
+  const before = styleRank(p.style);
+  p.style = Math.min(T.style.max, p.style + pts);
+  p.styleAt = w.frame;
+  if (what !== 'ko') { p.styleLog.push(what); if (p.styleLog.length > 4) p.styleLog.shift(); }
+  const st = w.stats[p.index];
+  st.style += pts;
+  const after = styleRank(p.style);
+  st.bestRank = Math.max(st.bestRank, after);
+  if (after > before) w.events.push({ type: 'rank', player: p.index, rank: after });
+}
+
 // Which attack a press of X becomes, and at whom. See README for the move list.
 function chooseAttack(w: World, p: Player, input: Input): { move: MoveName; target: Enemy | null } {
   const dir = stickDir(input, p.facing);
@@ -410,6 +433,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
     if (dodged) {
       p.perfectAt = w.frame;
       w.stats[p.index].perfects++;
+      addStyle(w, p, 'perfect');
       w.events.push({ type: 'perfect', pos: { ...p.pos }, by: p.index });
     }
     w.stats[p.index].dodges++;
@@ -428,6 +452,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
       setPlayer(p, 'counter', T.counter.frames - 8);
       p.stop = T.hitstop.light; w.shake = 0.15;
       w.stats[p.index].deflects++;
+      addStyle(w, p, 'deflect');
       w.events.push({ type: 'deflect', pos: { ...cup.pos }, by: p.index });
       return true;
     }
@@ -442,6 +467,7 @@ function tryAction(w: World, p: Player, action: Action, input: Input): boolean {
     p.target = best.id; p.combo = 0;
     for (const e of all) {
       damageEnemy(w, e, T.counter.damage, p.pos, 1.5, 'stun', T.counter.stagger, p.index, true);
+      addStyle(w, p, 'counter');
       w.stats[p.index].counters++;
       w.events.push({ type: 'counter', pos: { ...e.pos }, by: p.index });
     }
@@ -518,6 +544,7 @@ function stepPlayer(w: World, p: Player, input: Input) {
     if (pressed && standing(p)) p.buffer = { action: pressed, frames: T.inputBuffer, mx: input.mx, my: input.my };
     return;
   }
+  if (w.frame - p.styleAt > T.style.idle) p.style = Math.max(0, p.style - T.style.decay);
   p.t++;
 
   if (p.state === 'down') {
@@ -617,6 +644,7 @@ function landHits(w: World, p: Player, target: Enemy | undefined) {
     damageEnemy(w, e, Math.round((smash ? T.bottle.meleeDamage : m.damage) * bonus), p.pos, m.knock, m.effect as Effect, m.stun, p.index, smash || p.move === 'riposte');
   }
   p.hasHit = true;
+  addStyle(w, p, p.move);
   p.hits = w.frame - p.lastHitAt <= 90 ? p.hits + victims.length : victims.length;
   p.lastHitAt = w.frame;
   const st = w.stats[p.index];
@@ -656,6 +684,9 @@ function hurtPlayer(w: World, p: Player, base: number, from: Vec, heavy: boolean
   st.taken += Math.min(dmg, p.hp); st.takenBy[source] = (st.takenBy[source] ?? 0) + Math.min(dmg, p.hp);
   p.hp -= dmg;
   p.hits = 0; p.combo = 0;
+  // Getting hit drops the style meter a tier.
+  const tier = styleRank(p.style);
+  p.style = tier <= 0 ? 0 : T.style.tiers[tier - 1];
   const away = norm(sub(p.pos, from));
   p.pos.x += away.x * knock; p.pos.y += away.y * knock;
   dropBottle(w, p, away);
@@ -756,9 +787,19 @@ function stepEnemies(w: World) {
         if (e.t >= e.dur) setEnemy(e, 'circle', 0);
         break;
       case 'circle': {
-        e.angle += e.orbit * 0.006;
-        const want = { x: p.pos.x + Math.cos(e.angle) * k.circleRadius, y: p.pos.y + Math.sin(e.angle) * k.circleRadius };
-        move(want, speed * 0.6);
+        // Circling looks alive: every couple of seconds he may switch direction, drift in or out
+        // on his ring, or fake a step in.
+        if (e.t % 100 === 1) {
+          if (rand(w) < 0.35) e.orbit = -e.orbit;
+          e.ring = (rand(w) - 0.5) * 1.4;
+          if (rand(w) < 0.22) e.feint = 36;
+        }
+        e.angle += e.orbit * 0.008;
+        const fake = e.feint > 0 ? 1.8 * Math.sin(Math.PI * (36 - e.feint) / 36) : 0;
+        if (e.feint > 0) e.feint--;
+        const r = k.circleRadius + e.ring - fake;
+        const want = { x: p.pos.x + Math.cos(e.angle) * r, y: p.pos.y + Math.sin(e.angle) * r };
+        move(want, speed * (fake > 0 ? 1.1 : 0.6));
         e.facing = toN;
         break;
       }
@@ -811,7 +852,8 @@ function stepEnemies(w: World) {
         if (e.t >= e.dur) { setEnemy(e, 'circle', 0); e.cooldown = Math.max(e.cooldown, 20); }
         break;
       case 'air':
-        e.z += e.vz; e.vz -= T.air.gravity;
+        e.z += e.vz;
+        e.vz -= T.air.gravity * (Math.abs(e.vz) < T.air.hangBelow ? T.air.hang : e.vz > 0 ? T.air.rise : T.air.fall);
         if (e.z <= 0 && e.vz < 0) { knockDown(e, T.air.landDown); e.slammed = true; }
         break;
       case 'down':
@@ -888,7 +930,7 @@ function slams(w: World) {
       e.slammed = true;
       e.vel = { x: 0, y: 0 };
       e.hp -= T.slam.damage;
-      if (e.lastHitBy >= 0) w.stats[e.lastHitBy].slams++;
+      if (e.lastHitBy >= 0) { w.stats[e.lastHitBy].slams++; addStyle(w, w.players[e.lastHitBy], 'slam'); }
       if (e.hp <= 0) { e.hp = 0; setEnemy(e, 'dead', 0); if (e.lastHitBy >= 0) w.stats[e.lastHitBy].kos++; w.events.push({ type: 'ko', pos: { ...e.pos }, boss: e.kind === 'boss' }); }
       else e.dur += T.slam.extraDown;
       e.stop = T.hitstop.heavy; w.shake = 0.4;

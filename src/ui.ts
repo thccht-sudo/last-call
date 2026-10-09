@@ -138,8 +138,11 @@ export function showResults(w: World) {
   const cols = w.players.map((p, i) => {
     const s = w.stats[i];
     const worst = Object.entries(s.takenBy).sort((a, b) => b[1] - a[1])[0];
+    // A letter grade: style earned per minute, less what you took and how often you went down.
+    const score = s.style / Math.max(0.5, secs / 60) - s.taken * 1.2 - s.downs * 60;
+    const grade = score >= 380 ? 'S' : score >= 280 ? 'A' : score >= 190 ? 'B' : score >= 110 ? 'C' : 'D';
     return `<div class="col" style="--c:${CAST[i].css}">
-      <h3>${CAST[i].name}</h3>
+      <h3>${CAST[i].name} <span class="grade g${grade}">${grade}</span></h3>
       <dl>
         <dt>Damage dealt</dt><dd>${s.dealt}</dd>
         <dt>Knockouts</dt><dd>${s.kos}</dd>
@@ -147,7 +150,9 @@ export function showResults(w: World) {
         <dt>Cups returned</dt><dd>${s.deflects}</dd>
         <dt>Slams</dt><dd>${s.slams}</dd>
         <dt>Damage taken</dt><dd>${s.taken}</dd>
+        <dt>Style</dt><dd>${s.style}${s.bestRank >= 0 ? ` · peak ${T.style.names[s.bestRank]}` : ''}</dd>
         <dt>Best combo</dt><dd>${s.bestCombo}</dd>
+        <dt>Perfect evades</dt><dd>${s.perfects}</dd>
         <dt>Launches</dt><dd>${s.launches}</dd>
         <dt>Counters missed</dt><dd>${s.missedCounters}</dd>
         <dt>Counter whiffs</dt><dd>${s.whiffs}</dd>

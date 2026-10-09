@@ -29,20 +29,44 @@ const FRATS = [
   { letters: 'ΒΘΠ', shirt: 0xe58fb0, ink: '#23408f' }, // Beta
   { letters: 'ΣΧ', shirt: 0x1f3f8f, ink: '#f2c443' }, // Sigma Chi
   { letters: 'ΦΔΘ', shirt: 0xe4e4e4, ink: '#1f4fa6' }, // Phi Delt
-  { letters: 'ΚΣ', shirt: 0xb32030, ink: '#f4f1ea' }, // Kappa Sig
+  { letters: 'ΚΣ', shirt: 0x1f8a4c, ink: '#f4f1ea' }, // Kappa Sig, in its emerald (scarlet vanished into the brick)
 ];
 const PANTS = [0x2b3448, 0x6b5a45, 0x3a3f46, 0x2a2a30];
 const SKINS = [0xe0b48a, 0xc89470, 0xf0c8a4, 0x8d5f43, 0xd9a882];
 const SCALE: Record<EnemyKind, number> = { thug: 1, heavy: 1.18, thrower: 0.95, kicker: 1.02, boss: 1.35 };
-const thugLook = (kind: EnemyKind, id: number): Look => {
+export const thugLook = (kind: EnemyKind, id: number): Look => {
   const f = kind === 'heavy' || kind === 'boss' ? FRATS[0] : FRATS[(id * 7) % FRATS.length];
   return {
     shirt: f.shirt, pants: PANTS[id % PANTS.length], skin: SKINS[(id * 3) % SKINS.length],
     hair: [0x2a1d16, 0x6b4a2a, 0xb08a50, 0x1a1a1a][(id * 5) % 4],
     print: { letters: f.letters, ink: f.ink }, scale: SCALE[kind],
     build: kind === 'heavy' || kind === 'boss' ? 'heavy' : kind === 'kicker' || kind === 'thrower' ? 'lean' : 'regular',
+    // Identity cues that read from the camera: half the thugs wear backwards caps, the kicker a
+    // red headband, the President shades and a gold chain.
+    hat: kind === 'kicker' ? 'band' : kind === 'thug' && id % 2 === 0 ? 'cap' : undefined,
+    hatColor: kind === 'kicker' ? 0xd8261c : [0xf2f2f2, 0x990000, 0xc9b27c, 0x2a5cc4][(id * 3) % 4], // white, IU crimson, khaki, royal
+    shades: kind === 'boss', chain: kind === 'boss',
   };
 };
+
+const MOVE_WORDS: Partial<Record<string, string>> = { sweep: 'SWEEP', uppercut: 'LAUNCH', riposte: 'RIPOSTE', knee: 'KNEE!', stomp: 'STOMP', roundhouse: 'KICK', smash: 'BOTTLED' };
+
+// Chevrons pointing along a lunge's path, white-edged so they read on red brick.
+let laneTex: THREE.CanvasTexture | null = null;
+function laneTexture() {
+  if (laneTex) return laneTex;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 256;
+  const g = c.getContext('2d')!;
+  g.fillStyle = 'rgba(255,40,40,0.35)'; g.fillRect(8, 0, 48, 256);
+  g.lineJoin = 'round';
+  for (let y = 20; y < 256; y += 64) {
+    g.beginPath(); g.moveTo(12, y + 28); g.lineTo(32, y); g.lineTo(52, y + 28);
+    g.strokeStyle = '#fff'; g.lineWidth = 12; g.stroke();
+    g.strokeStyle = '#ff2a2a'; g.lineWidth = 6; g.stroke();
+  }
+  laneTex = new THREE.CanvasTexture(c); laneTex.colorSpace = THREE.SRGBColorSpace;
+  return laneTex;
+}
 
 interface Fx { mesh: THREE.Object3D; life: number; max: number; vel?: THREE.Vector3; grow?: number }
 
@@ -63,7 +87,7 @@ export class Renderer {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
   private players: { fig: Figure; tag: HTMLDivElement }[] = [];
-  private enemies = new Map<number, { fig: Figure; prompt: HTMLDivElement; bar: HTMLDivElement }>();
+  private enemies = new Map<number, { fig: Figure; prompt: HTMLDivElement; bar: HTMLDivElement; edge: HTMLDivElement; lane: THREE.Mesh }>();
   private bottles = new Map<number, THREE.Mesh>();
   private cups = new Map<number, { mesh: THREE.Group; prompt: HTMLDivElement }>();
   private bossBar: HTMLDivElement | null = null;
@@ -94,6 +118,7 @@ export class Renderer {
   private camTarget = new THREE.Vector3();
   private camPrev = new THREE.Vector3();
   private tracks = new Map<string, Track>();
+  private camZoom = 1; private zoomPrev = 1;
   private trauma = 0; private kick = new THREE.Vector2(); private fovPunch = 0; private ticks = 0;
   private ragdolls = new Map<string, Ragdoll>();
   private restPose = new Map<string, Pose>();
@@ -235,14 +260,21 @@ export class Renderer {
     // Launched enemies fly at their height; a knockout in the air starts the ragdoll up there.
     const z = e.state === 'air' || (e.state === 'dead' && !this.ragdolls.has(key)) ? e.z : 0;
     const tr = this.track(key, f, e.pos, e.facing, z, e.state === 'active' || e.state === 'stun' && e.t < 2, e.stop, e.hitDir, true);
-    if ((e.stop > 0 || w.hitstop > 0) && e.state !== 'dead') { tr.prev.pose = tr.cur.pose; return; }
+    if ((e.stop > 0 || w.hitstop > 0) && e.state !== 'dead') {
+      // Impact flash for the first frames of the freeze.
+      if (e.stop >= 5) f.glow(0xffffff, 0.9);
+      tr.prev.pose = tr.cur.pose; return;
+    }
     let target = enemyPose(e, w, this.motion(key, e.pos, T[e.kind].speed));
     if (e.state === 'down' || e.state === 'dead') {
       // Launch speed from the knockback the simulation gave them: harder hits fly higher.
       const v = Math.hypot(e.vel.x, e.vel.y) * 60;
       const dir = v > 0.1 ? { x: e.vel.x * 60 / v, y: e.vel.y * 60 / v } : { x: -e.facing.x, y: -e.facing.y };
       const heavy = e.kind === 'heavy' || e.kind === 'boss' ? 0.6 : 1;
-      const launch = new THREE.Vector3(dir.x * Math.min(7, 1.5 + v * 0.35) * heavy, Math.min(5.5, 1.6 + v * 0.22) * heavy, dir.y * Math.min(7, 1.5 + v * 0.35) * heavy);
+      // Knocked out of the air (a spike): the ragdoll starts up where he was and is driven down.
+      const fromAir = !this.ragdolls.has(key) && tr.prev.z > 0.25;
+      if (fromAir) f.root.position.y = tr.prev.z;
+      const launch = new THREE.Vector3(dir.x * Math.min(7, 1.5 + v * 0.35) * heavy, fromAir ? -7 : Math.min(5.5, 1.6 + v * 0.22) * heavy, dir.y * Math.min(7, 1.5 + v * 0.35) * heavy);
       target = this.ragdollPose(key, f, w, e.pos, launch);
     } else if (e.state === 'getup') {
       target = this.rising(key, target, e.t / Math.max(1, e.dur));
@@ -262,10 +294,37 @@ export class Renderer {
   }
 
   private burst(pos: Vec, color: number, size: number, life: number) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(size, 12, 8), new THREE.MeshBasicMaterial({ color, transparent: true }));
+    const m = new THREE.Mesh(new THREE.SphereGeometry(size * 0.6, 12, 8), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 }));
     m.position.set(pos.x, 1.2, pos.y);
     this.scene.add(m);
-    this.fx.push({ mesh: m, life, max: life, grow: 2.5 });
+    this.fx.push({ mesh: m, life: Math.round(life * 0.7), max: Math.round(life * 0.7), grow: 1.4 });
+  }
+
+  // A puff of dust where an evade pushed off, so the step reads even when it's up the screen.
+  private dust(pos: Vec) {
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2, r = 0.05 + Math.random() * 0.05;
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.09 + Math.random() * 0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0xb8aa98, transparent: true, opacity: 0.6, depthWrite: false }));
+      m.position.set(pos.x, 0.12, pos.y);
+      this.scene.add(m);
+      this.fx.push({ mesh: m, life: 16, max: 16, vel: new THREE.Vector3(Math.cos(a) * r, 0.012, Math.sin(a) * r), grow: 1.5 });
+    }
+  }
+
+  // Streaks thrown out along the blow: a few for a jab, a spray for a heavy hit.
+  private sparks(pos: Vec, dir: Vec | undefined, heavy: boolean) {
+    const d = dir ?? { x: 0, y: 1 };
+    const base = Math.atan2(d.y, d.x);
+    for (let i = 0; i < (heavy ? 12 : 5); i++) {
+      const a = base + (Math.random() - 0.5) * (heavy ? 1.6 : 1.0);
+      const speed = (heavy ? 0.16 : 0.11) * (0.6 + Math.random() * 0.8);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.025, heavy ? 0.42 : 0.3), new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0xffffff : 0xffd98a, transparent: true }));
+      m.position.set(pos.x, 1.15 + (Math.random() - 0.5) * 0.3, pos.y);
+      const vel = new THREE.Vector3(Math.cos(a) * speed, 0.02 + Math.random() * 0.04, Math.sin(a) * speed);
+      m.lookAt(m.position.clone().add(vel));
+      this.scene.add(m);
+      this.fx.push({ mesh: m, life: heavy ? 9 : 7, max: heavy ? 9 : 7, vel });
+    }
   }
 
   private shards(pos: Vec) {
@@ -279,7 +338,7 @@ export class Renderer {
   }
 
   clear() {
-    for (const v of this.enemies.values()) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); }
+    for (const v of this.enemies.values()) { this.scene.remove(v.fig.root, v.lane); v.prompt.remove(); v.bar.remove(); v.edge.remove(); }
     this.enemies.clear();
     this.moves.clear(); this.blenders.clear(); this.tracks.clear();
     this.ragdolls.clear(); this.restPose.clear(); this.risingT.clear();
@@ -294,9 +353,9 @@ export class Renderer {
     return { sx: (v.x * 0.5 + 0.5) * innerWidth, sy: (-v.y * 0.5 + 0.5) * innerHeight };
   }
 
-  private popup(pos: Vec, text: string) {
+  private popup(pos: Vec, text: string, kind = '') {
     const el = document.createElement('div');
-    el.className = 'popup'; el.textContent = text;
+    el.className = `popup ${kind}`; el.textContent = text;
     const { sx, sy } = this.screen(pos.x, 2.6, pos.y);
     el.style.left = `${sx}px`; el.style.top = `${sy}px`;
     this.overlay.append(el);
@@ -325,14 +384,19 @@ export class Renderer {
       if (ev.type === 'ko') props?.blast(ev.pos, 1.4, 3.5);
       if (ev.type === 'hit' && ev.heavy) props?.blast(ev.pos, 1.0, 2);
       if (ev.type === 'shatter') props?.blast(ev.pos, 0.8, 1.5);
-      if (ev.type === 'hit') this.burst(ev.pos, 0xffffff, ev.heavy ? 0.35 : 0.22, ev.heavy ? 10 : 7);
+      // Named moves get a word, so you know what you just did.
+      if (ev.type === 'hit' && ev.move && MOVE_WORDS[ev.move]) this.popup(ev.pos, MOVE_WORDS[ev.move]!, 'small');
+      if (ev.type === 'whiff') { const p = this.world?.players[ev.by]; if (p) this.popup(p.pos, 'MISS', 'miss'); }
+      if (ev.type === 'dodge') { const p = this.world?.players[ev.by]; if (p) this.dust(p.pos); }
+      if (ev.type === 'hit') { this.burst(ev.pos, 0xffffff, ev.heavy ? 0.28 : 0.18, ev.heavy ? 8 : 6); this.sparks(ev.pos, ev.by >= 0 ? this.world?.players[ev.by]?.facing : undefined, ev.heavy); }
       if (ev.type === 'counter') this.burst(ev.pos, 0xffd23f, 0.45, 12);
-      if (ev.type === 'playerHit') this.burst(ev.pos, 0xff4040, 0.3, 9);
+      if (ev.type === 'playerHit') this.burst(ev.pos, 0xffe2c4, 0.22, 6); // not red: red means "dodge this"
       if (ev.type === 'shatter') this.shards(ev.pos);
       if (ev.type === 'tag') this.popup(ev.pos, 'TAG TEAM!');
       if (ev.type === 'slam') { this.burst(ev.pos, 0xffffff, 0.5, 12); this.popup(ev.pos, 'SLAM!'); }
       if (ev.type === 'launch') this.burst(ev.pos, 0xffd23f, 0.3, 10);
       if (ev.type === 'perfect') { this.burst(ev.pos, 0x7fd8ff, 0.5, 14); this.popup(ev.pos, 'PERFECT'); }
+      if (ev.type === 'rank') { const p = this.world?.players[ev.player]; if (p) this.popup(p.pos, `${T.style.names[ev.rank]}!`); }
       if (ev.type === 'spike') { props?.blast(ev.pos, 2.0, 4); this.burst({ ...ev.pos }, 0xffffff, 0.6, 14); this.popup(ev.pos, 'SPIKE!'); }
       if (ev.type === 'deflect') { this.burst(ev.pos, 0xffd23f, 0.3, 8); this.popup(ev.pos, 'RETURN TO SENDER'); }
     }
@@ -343,6 +407,11 @@ export class Renderer {
     if (!v) {
       const fig = new Figure(CAST[i].look, CLIPS.guard.frames[0]);
       this.scene.add(fig.root);
+      // A ring on the floor in the player's colour, so you can find yourself in a crowd.
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(CAST[i].css), transparent: true, opacity: 0.85, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; ring.renderOrder = 1;
+      ring.scale.setScalar(1 / (CAST[i].look.scale * 1.08));
+      fig.root.add(ring);
       const tag = document.createElement('div'); tag.className = 'nametag';
       tag.style.setProperty('--c', CAST[i].css);
       this.overlay.append(tag);
@@ -358,8 +427,13 @@ export class Renderer {
       this.scene.add(fig.root);
       const prompt = document.createElement('div'); prompt.className = 'prompt';
       const bar = document.createElement('div'); bar.className = 'ebar'; bar.appendChild(document.createElement('i'));
-      this.overlay.append(prompt, bar);
-      v = { fig, prompt, bar };
+      const edge = document.createElement('div'); edge.className = 'edge'; edge.hidden = true;
+      this.overlay.append(prompt, bar, edge);
+      // The path a red lunge will take, painted on the floor while he winds up.
+      const lane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: laneTexture(), transparent: true, opacity: 0, depthWrite: false }));
+      lane.rotation.x = -Math.PI / 2; lane.position.y = 0.025; lane.renderOrder = 1; lane.visible = false;
+      this.scene.add(lane);
+      v = { fig, prompt, bar, edge, lane };
       this.enemies.set(e.id, v);
     }
     return v;
@@ -367,7 +441,9 @@ export class Renderer {
 
   // Once per simulation tick (so it keeps time with the fight at any frame rate, and slows with
   // it): poses, ragdolls, props, effects, camera target and shake.
+  private world: World | null = null;
   update(w: World) {
+    this.world = w;
     this.ticks++;
     this.props[w.stage]?.step(LEVELS[w.stage].obstacles);
     w.players.forEach((p, i) => this.posePlayer(p, this.playerView(i).fig, w));
@@ -386,6 +462,10 @@ export class Renderer {
     const focus = (up.length ? up : w.players).reduce((a, p, _, all) => ({ x: a.x + p.pos.x / all.length, y: a.y + p.pos.y / all.length }), { x: 0, y: 0 });
     this.camPrev.copy(this.camTarget);
     this.camTarget.lerp(new THREE.Vector3(focus.x * 0.62, 0, focus.y * 0.45), 0.09);
+    // Co-op: pull back when the two of you are far apart, so nobody leaves the screen.
+    const spread = up.length > 1 ? Math.hypot(up[0].pos.x - up[1].pos.x, (up[0].pos.y - up[1].pos.y) * 1.6) : 0;
+    this.zoomPrev = this.camZoom;
+    this.camZoom += (Math.max(1, Math.min(1.3, 1 + (spread - 6) / 16)) - this.camZoom) * 0.05;
     this.trauma = Math.max(0, this.trauma - 0.025);
     this.kick.multiplyScalar(0.78);
     this.fovPunch *= 0.86;
@@ -408,6 +488,8 @@ export class Renderer {
       const reviving = p.state === 'down' && p.revive > 0;
       v.tag.textContent = p.state === 'down' ? (reviving ? `${CAST[i].name} ${Math.round(p.revive / T.coop.reviveFrames * 100)}%` : `${CAST[i].name} · HELP`) : CAST[i].name;
       v.tag.classList.toggle('down', p.state === 'down');
+      // Solo, the floor ring marks you; the name only shows in co-op or when you need help.
+      v.tag.style.opacity = w.players.length > 1 || p.state === 'down' ? '1' : '0';
     });
     for (let i = w.players.length; i < this.players.length; i++) { this.scene.remove(this.players[i].fig.root); this.players[i].tag.remove(); }
     this.players.length = Math.min(this.players.length, w.players.length);
@@ -426,12 +508,29 @@ export class Renderer {
       v.prompt.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -50%)`;
       v.prompt.textContent = canCounter ? 'Y' : mustDodge ? 'A' : '';
       v.prompt.className = 'prompt' + (canCounter ? ' counter' : mustDodge ? ' dodge' : '');
+      const atk = T.attacks[e.attack];
+      v.lane.visible = e.unblockable && atk.lunge > 0 && (e.state === 'windup' || (e.state === 'active' && !e.connected));
+      if (v.lane.visible) {
+        const length = atk.lunge + atk.reach, u = e.state === 'windup' ? e.t / Math.max(1, e.dur) : 1;
+        v.lane.scale.set(0.9, length, 1);
+        v.lane.position.set(e.pos.x + e.facing.x * length / 2, 0.025, e.pos.y + e.facing.y * length / 2);
+        v.lane.rotation.z = Math.atan2(-e.facing.x, -e.facing.y);
+        (v.lane.material as THREE.MeshBasicMaterial).opacity = 0.35 + 0.5 * u + (u > 0.6 ? 0.15 * Math.sin(w.frame * 0.9) : 0);
+      }
+      // A red attack coming from off screen: an arrow at the screen edge pointing at him.
+      const off = sx < 0 || sx > innerWidth || sy < 0 || sy > innerHeight;
+      v.edge.hidden = !(off && e.unblockable && (e.state === 'windup' || e.state === 'active'));
+      if (!v.edge.hidden) {
+        const cx = innerWidth / 2, cy = innerHeight / 2, ang = Math.atan2(sy - cy, sx - cx);
+        const ex = Math.max(24, Math.min(innerWidth - 24, sx)), ey = Math.max(24, Math.min(innerHeight - 24, sy));
+        v.edge.style.transform = `translate(${ex}px, ${ey}px) translate(-50%, -50%) rotate(${ang + Math.PI / 2}rad)`;
+      }
       v.bar.style.transform = `translate(${sx}px, ${sy + 22}px) translate(-50%, 0)`;
       v.bar.style.opacity = e.state === 'dead' || e.hp === e.maxHp ? '0' : '1';
       (v.bar.firstChild as HTMLElement).style.width = `${(e.hp / e.maxHp) * 100}%`;
     }
     for (const [id, v] of this.enemies) {
-      if (!seen.has(id)) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); this.enemies.delete(id); this.tracks.delete(`e${id}`); }
+      if (!seen.has(id)) { this.scene.remove(v.fig.root); v.prompt.remove(); v.bar.remove(); v.edge.remove(); this.scene.remove(v.lane); this.enemies.delete(id); this.tracks.delete(`e${id}`); }
     }
 
     // Red cups in flight, with a counter prompt when someone can knock one back.
@@ -505,7 +604,7 @@ export class Renderer {
     // Trauma shake (squared, smoothed noise on the tick clock) plus a kick away from the hit.
     const shake = this.trauma * this.trauma, tt = this.ticks + alpha;
     const sx = noise(tt * 0.45, 1.3) * 0.32 * shake + this.kick.x, sy = noise(tt * 0.45, 7.1) * 0.22 * shake, sz = noise(tt * 0.45, 4.2) * 0.25 * shake + this.kick.y;
-    const zoom = 0.88 - 0.4 * pk;
+    const zoom = (0.88 - 0.4 * pk) * (this.zoomPrev + (this.camZoom - this.zoomPrev) * alpha);
     this.camera.position.set(aim.x + sx, 1.6 + 8.9 * zoom + sy, aim.z + 12.5 * zoom + sz);
     this.camera.lookAt(aim.x + sx * 0.5, 1.6 - 0.6 * pk, aim.z - 2.2 * zoom + sz * 0.5);
     this.camera.rotateZ(noise(tt * 0.5, 2.9) * 0.012 * shake);

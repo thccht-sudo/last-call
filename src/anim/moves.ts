@@ -163,8 +163,9 @@ function evade(time: number, u: number, dx: number, dz: number): Pose {
 }
 
 // Sprinting into range at the start of a long lunge.
-function dash(time: number, t: number): Pose {
-  const pose = sample(CLIPS.dash, t * 1.6, true);
+function dash(distance: number): Pose {
+  // Stepped by distance covered, at a long lunging stride.
+  const pose = sample(CLIPS.dash, distance / (CLIPS.dash.stride * 1.8) * CLIPS.dash.frames.length, true);
   lean(pose, 0.2);
   return pose;
 }
@@ -175,13 +176,13 @@ export function playerPose(p: Player, w: World, m: Motion): Pose {
   const time = w.frame;
   switch (p.state) {
     case 'free': {
-      // Conrad runs proud, George runs active; both cover about 2.8 m per stride cycle.
-      const clip = p.index === 0 ? CLIPS.runProud : CLIPS.runActive;
-      return locomotion(clip, m.distance, m.speed, time, 2.8 / clip.stride);
+      // A sprint cycle stretched a little (2.2 m per stride) so the feet roughly keep up with the
+      // ground at 6.5 m/s.
+      return locomotion(CLIPS.dash, m.distance, m.speed, time, 2.2 / CLIPS.dash.stride);
     }
     case 'attack': {
       const s = T.moves[p.move], t = p.t - p.lead;
-      if (t < 0) return dash(time, p.t);
+      if (t < 0) return dash(m.distance);
       const { wind, rec, hit } = phase(t, s.startup, s.active, s.recovery);
       const k = hit || rec > 0 ? 1 : easeIn(wind);
       switch (p.move) {
@@ -296,7 +297,7 @@ function enemyStrike(e: Enemy, time: number): Pose {
     }
     case 'charge': {
       // Head down, shoulder first.
-      const pose = k && rec === 0 ? dash(time, e.t) : guard(time);
+      const pose = k && rec === 0 ? dash(e.t * T.attacks.charge.lunge / T.attacks.charge.active) : guard(time);
       if (!k) crouch(pose, 0.2 * wind);
       rotate(pose, UPPER, get(pose, J.Hips), 'y', 0.7 * (k ? 1 - rec : wind));
       lean(pose, 0.45 * (k ? 1 - rec : wind));
@@ -328,8 +329,17 @@ export function enemyPose(e: Enemy, w: World, m: Motion): Pose {
   const time = w.frame + e.id * 37; // desync idle breathing between enemies
   const walkClip = e.kind === 'heavy' || e.kind === 'boss' ? CLIPS.angry : CLIPS.swagger;
   switch (e.state) {
-    case 'spawn': case 'circle': case 'approach':
-      return locomotion(walkClip, m.distance, m.speed, time, e.state === 'approach' ? 1.6 : 1.2);
+    case 'spawn': case 'circle': case 'approach': {
+      const pose = locomotion(walkClip, m.distance, m.speed, time, 1);
+      // Now and then a circling enemy throws an arm up: "come on!" (mocap, upper body only).
+      const phase = (e.t + e.id * 97) % 520;
+      if (e.state === 'circle' && e.t > 40 && phase < 150 && !(e.feint > 0)) {
+        const k = Math.sin(Math.PI * phase / 150) ** 0.5;
+        const g = sample(CLIPS.taunt, 15 + phase * 0.55);
+        for (const j of UPPER) for (let c = 0; c < 3; c++) pose[j * 3 + c] += (g[j * 3 + c] - pose[j * 3 + c]) * k;
+      }
+      return pose;
+    }
     case 'windup': case 'active': case 'recover': return enemyStrike(e, time);
     case 'stun': return reel(time, e.t, e.dur);
     case 'air': return airborne(time, e.t);

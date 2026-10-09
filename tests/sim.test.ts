@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable, counterWindow } from '../src/sim/world';
+import { createWorld, spawnEnemy, step, addPlayer, NO_INPUT, Input, World, framesToStrike, counterable, deflectable, counterWindow, styleRank } from '../src/sim/world';
 import { TUNING as T } from '../src/sim/tuning';
 import { insideObstacle } from '../src/sim/level';
 import type { EnemyKind } from '../src/sim/tuning';
@@ -607,5 +607,50 @@ describe('evade', () => {
     run(w, 20);
     expect(w.players[0].hp).toBe(T.player.hp);
     expect(w.stats[0].perfects).toBe(1);
+  });
+});
+
+describe('style meter', () => {
+  it('varied hits climb the ranks faster than repeating one move', () => {
+    const varied = dummy('heavy');
+    hit(varied.w); hit(varied.w); hit(varied.w, press({ attack: true, my: 1 })); // jab, cross, sweep
+    const repeat = dummy('heavy');
+    for (let i = 0; i < 3; i++) { hit(repeat.w); run(repeat.w, T.string.window + 2); } // jab, jab, jab
+    expect(varied.w.players[0].style).toBeGreaterThan(repeat.w.players[0].style);
+  });
+
+  it('rising a tier is announced, and getting hit drops a tier', () => {
+    const { w } = dummy('heavy');
+    const p = w.players[0];
+    p.style = T.style.tiers[2] - 1;
+    let ranked = false;
+    step(w, up);
+    for (let i = 0; i < 20; i++) { ranked ||= w.events.some(e => e.type === 'rank'); step(w, NO_INPUT); }
+    expect(ranked).toBe(true);
+    expect(styleRank(p.style)).toBe(2);
+    const e2 = spawnEnemy(w, 'thug', { x: p.pos.x, y: p.pos.y - 1.1 }, 'circle');
+    untilStrikeIn(w, e2, 0);
+    run(w, 10);
+    expect(styleRank(p.style)).toBeLessThan(2);
+  });
+
+  it('fades when you stop fighting', () => {
+    const { w } = dummy();
+    hit(w);
+    const s = w.players[0].style;
+    run(w, 200);
+    expect(w.players[0].style).toBeLessThan(s);
+  });
+});
+
+describe('targeting around furniture', () => {
+  it('prefers a man in the open over one behind the patio fence', () => {
+    const w = createWorld(7);
+    w.wave = 0; w.waveTimer = 1e9;
+    w.players[0].pos = { x: -2, y: -1.4 };
+    const behind = spawnEnemy(w, 'thug', { x: -2, y: -3.6 }, 'stun'); behind.dur = 999; // inside the fence
+    const open = spawnEnemy(w, 'thug', { x: 0.6, y: -1.0 }, 'stun'); open.dur = 999;
+    step(w, press({ attack: true, my: -1, mx: 0.3 }));
+    expect(w.players[0].target).toBe(open.id);
   });
 });

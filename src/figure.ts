@@ -11,6 +11,7 @@ export interface Look {
   longSleeves?: boolean;
   print?: { letters: string; ink: string }; // Greek letters across the chest and back
   build?: Build;
+  hat?: 'cap' | 'band'; hatColor?: number; shades?: boolean; chain?: boolean;
 }
 export type Build = 'regular' | 'heavy' | 'lean';
 
@@ -33,7 +34,7 @@ const v = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y
 
 // Mocap actors stand about 1.65 m; this brings a scale-1 character to about 1.78 m (5'10").
 const BASE_SCALE = 1.08;
-const HEAD_SCALE = 1.18; // stylised: a slightly big head reads better from the overhead camera
+const HEAD_SCALE = 1.28; // stylised: a slightly big head reads better from the overhead camera
 
 type Part = { position: number[]; normal: number[]; index: number[]; skinIndex: number[]; skinWeight: number[] };
 type Bodies = { joints: number[][]; bones: { name: string; from: number; to: number; side: number[] | null }[]; builds: Record<Build, Record<string, Part>> };
@@ -176,7 +177,7 @@ export class Figure {
     const body = new THREE.SkinnedMesh(geo, this.mats);
     body.castShadow = true; body.frustumCulled = false;
     body.bind(skeleton, new THREE.Matrix4());
-    this.ink = outlineMaterial(build === 'heavy' ? 0.026 : 0.022);
+    this.ink = outlineMaterial(build === 'heavy' ? 0.032 : 0.028);
     const outline = new THREE.SkinnedMesh(geo, this.ink);
     outline.frustumCulled = false;
     outline.bind(skeleton, new THREE.Matrix4());
@@ -202,7 +203,7 @@ export class Figure {
     if (look.print) {
       const m = new THREE.MeshBasicMaterial({ map: letterTexture(look.print.letters, look.print.ink), transparent: true, depthWrite: false });
       for (const side of [1, -1]) {
-        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.21), m);
+        const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.26), m);
         decal.position.set(0, this.torsoLen * 0.6, side * (this.chestDepth + 0.012));
         if (side < 0) decal.rotation.y = Math.PI;
         this.torso.add(decal);
@@ -269,6 +270,35 @@ export class Figure {
       const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.005, 0.005), frame);
       bridge.position.set(0, 0.104, 0.121);
       this.head.add(bridge);
+    }
+    if (look.hat === 'cap') {
+      // A backwards baseball cap: crown, a button on top, the brim over the back of the neck.
+      const capMat = toon(look.hatColor ?? 0x222222);
+      const crown = new THREE.Mesh(new THREE.SphereGeometry(0.124, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+      crown.position.set(0, 0.11, 0); crown.scale.set(1.02, 0.85, 1.05);
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.012, 16, 1, false, 0, Math.PI), capMat);
+      brim.position.set(0, 0.115, -0.1); brim.rotation.set(0.15, Math.PI / 2, 0); brim.scale.set(1, 1, 0.9);
+      const button = new THREE.Mesh(new THREE.SphereGeometry(0.014, 6, 4), capMat);
+      button.position.set(0, 0.215, 0);
+      this.head.add(crown, brim, button);
+    }
+    if (look.hat === 'band') {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.016, 6, 24), toon(look.hatColor ?? 0xd8261c));
+      band.position.y = 0.135; band.rotation.x = Math.PI / 2 - 0.12;
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.008), band.material);
+      tail.position.set(0.03, 0.09, -0.125); tail.rotation.z = 0.4;
+      this.head.add(band, tail);
+    }
+    if (look.shades) {
+      const black = toon(0x080808);
+      const lenses = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.03, 0.02), black);
+      lenses.position.set(0, 0.1, 0.112);
+      this.head.add(lenses);
+    }
+    if (look.chain) {
+      const chain = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.012, 6, 24), new THREE.MeshStandardMaterial({ color: 0xe8b830, metalness: 0.9, roughness: 0.25 }));
+      chain.position.set(0, this.torsoLen - 0.05, 0.05); chain.rotation.x = Math.PI / 2 + 0.5; chain.scale.set(1.1, 1, 1);
+      this.torso.add(chain);
     }
     this.head.scale.setScalar(HEAD_SCALE);
     this.root.add(this.head);

@@ -30,6 +30,12 @@ export const LINES = [
   ['down1', 'ash', 'a man knocked down calling to his friend', "George! A little help!"],
   ['down2', 'verse', 'a man knocked down calling to his friend', "Conrad! Get me up!"],
   ['win', 'ash', 'a tired, satisfied man after a bar fight, with a little laugh', "Alright. Who's buying?"],
+  // Perfect evades and the top style rank.
+  ['evade1', 'ash', 'a calm man stepping out of the way of a punch, dry and amused', 'Too slow.'],
+  ['evade2', 'verse', 'a wry man dodging a punch at the last second, cheeky', 'Missed me.'],
+  ['rank1', 'ash', 'a man in a bar fight on a roll, shouting it like a bartender ringing the bell', 'LAST CALL!'],
+  ['rank2', 'verse', 'a man in a bar fight on a roll, delighted, shouting', "Now we're talking!"],
+  ['stomp1', 'onyx', 'a frat guy on the floor getting stepped on, a pained wheeze, no words', 'Hngh!'],
 ];
 
 async function speak([name, voice, style, line]) {

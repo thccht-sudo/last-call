@@ -11,7 +11,8 @@ The title card shows the controls and picks Easy, Normal or Hard (enemy damage, 
 enemy health). Esc or Start pauses: restart, music / sounds / voices volume, difficulty,
 graphics (auto drops shadows, then resolution, if the frame rate sags) and a frame-rate readout
 (F). First-time tips explain counters, dodges, combos, cups, bottles and revives as they come up.
-After each fight a results screen shows per-player damage, knockouts, best combo, launches,
+After each fight a results screen grades each player (S to D, from style earned per minute
+less damage taken) and shows style, damage, knockouts, best combo, launches, perfect evades,
 counters landed and missed, slams, and what hurt you most. The last knockout of each round plays in slow motion.
 
 Player 1 is Conrad, player 2 is George.
@@ -54,9 +55,20 @@ out of a hit stagger after a split second, so nothing locks you out for long.
 | Stomp | X next to a man on the floor | Extra damage, keeps him down a little longer |
 | Bottle | B to pick up, B to throw, or X to smash it over a head | |
 
-Enemy attacks glow **yellow** (counter with Y) or **red** (can't be countered: dodge with A;
-a red lunge is heard as a warning sting, so roll to the side and let it fly past). Nothing
-grabs or holds you.
+Enemy attacks glow **yellow** (counter with Y, round prompt) or **red** (can't be countered,
+diamond prompt: dodge with A). A red attack is heard as a warning sting, and one coming from
+off screen shows an arrow at the screen edge. Nothing grabs or holds you.
+
+**Evade (A):** you keep facing the nearest threat and step relative to him: push across him
+for a sidestep, away for a backstep, toward him (or with nobody near) for a dash; leave the
+stick alone to step back. Most of the distance comes in the first few frames, and you slip
+through the crowd while invulnerable. Dodge just before a swing aimed at you lands for a
+**PERFECT** evade: a beat of slow motion, and the flying knee after it hits much harder.
+Sidestep red lunges and let them fly past.
+
+**Style meter:** under each health bar. Hits, counters, slams, perfect evades and knockouts
+fill it; repeating the same move earns a third as much; it fades when you stop fighting and
+drops a tier when you're hit. Tiers: TIPSY, BUZZED, ROWDY, WILD, LEGENDARY, LAST CALL.
 
 The opposition wears IU fraternity shirts (FIJI, ATO, Beta, Sigma Chi, Phi Delt, Kappa Sig);
 the big ones are always FIJI. Three rounds:
@@ -71,7 +83,17 @@ the big ones are always FIJI. Three rounds:
 Music: three straight-synthwave tracks (title, fight, final round) generated with Google Lyria 3
 through OpenRouter by `tools/generate-music.mjs`, crossfaded by game state. M mutes.
 
-Animation: jointed mannequins posed from motion capture. Punches, the kick, the overhead smash,
+Characters: modelled in Blender by `tools/build-characters.py` (run with the `bpy` module,
+Blender 4.2: `pip install bpy==4.2.0` on Python 3.11, then `python tools/build-characters.py
+src/anim/bodies.json`). Each body type (regular, heavy, lean) is clay built from metaball
+capsules per clothing layer, meshed, decimated, smoothed and weighted to a 13-bone skeleton laid
+along the 18 mocap joints. `src/figure.ts` aims each bone along its joints every frame (limb
+twist from the elbow or knee bend) and skins the mesh, with toon shading, a rim light and an
+ink outline that takes the yellow or red of a telegraph. Heads carry hair, beards, glasses,
+backwards caps (half the thugs), the kicker's red headband and the President's shades and
+chain. Players have a ring in their colour on the floor.
+
+Animation: posed from motion capture. Punches, the kick, the overhead smash,
 walks and the frat swagger are real mocap from the Bandai Namco Research Motion Dataset,
 retimed onto each move's frame data by `src/anim/moves.ts`, so tuning a move's startup, active
 or recovery frames retimes its animation too. The lunge's sprint-in is the mocap dash, and
@@ -86,11 +108,21 @@ or `/strip.html?clip=dash&from=0&to=27` for raw baked frames.
 Physics: the fight runs on a deterministic 60 Hz simulation (circles on a flat floor plus a
 height for launched enemies, knockback, juggle gravity, slams into obstacles). Hits use frame
 data: the locked target is hit anywhere within 2.1 m on the active frames, anyone else only
-inside the move's reach and a cone in front; hitstop freezes the fight for 5 to 12 frames by
-weight of hit. On top of that, purely for looks, `src/physics.ts` turns anyone knocked down
+inside the move's reach and a cone in front. Hitstop freezes the attacker for 5 to 9 frames
+by weight of hit and the victim 2 frames longer, rattling along the line of the blow; counters
+and spikes freeze the whole fight. Launched enemies rise slower than they fall and hang at the
+top. The renderer advances poses, ragdolls, props, effects and the camera once per sim tick
+and interpolates between ticks, so it plays the same at any refresh rate and slow motion stays
+smooth. The camera shakes by accumulated trauma (smoothed noise), kicks along each blow, punches
+in its field of view on big hits, and pulls back in co-op when you're far apart. On top of that, purely for looks, `src/physics.ts` turns anyone knocked down
 into a Verlet ragdoll launched along the hit (harder hits fly higher) that tumbles, drapes and
 slumps against tables, the fence and the bar, and scatters loose props: stools, cans, cups, a
 trash can and a traffic cone. Each browser runs its own copy, so it never affects the fight.
+
+AI playtesting: `?manual` stops the game loop and exposes `game.advance(frames, input)`, so an
+agent can look at a frame, decide and act. A council of AI playtesters (a first-time player, a
+telegraph reader, a combo explorer, an art director and an evade tester) played it this way
+from screenshots; their reports drove the readability fixes.
 
 `npm install && npm run dev` to run locally. After each deploy CI plays the live site with
 `tools/smoke.mjs` and keeps a screenshot as a run artifact. `npm test` runs the fight simulation headless,
